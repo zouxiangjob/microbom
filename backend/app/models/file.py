@@ -11,3 +11,5 @@ class FileModel(Base):
     file_size: Mapped[int] = mapped_column(Integer, nullable=False) # 文件大小（字节）
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False) # 文件类型，如 "image/jpeg"
     created_at: Mapped[DateTime] = mapped_column(DateTime, default=func.now())
+    bus_id: Mapped[str] = mapped_column(String(100), nullable=False)  # 业务 ID，关联具体业务对象
+    bus_type: Mapped[str] = mapped_column(String(100), nullable=False) # 业务 type，关联具体业务对象
