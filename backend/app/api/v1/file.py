@@ -1,56 +1,101 @@
-import os
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict  # 👈 导入 ConfigDict
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Form
+from uuid import UUID as PyUUID
+from typing import Dict, Any
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Path, Form
+from pydantic import BaseModel, ConfigDict, computed_field, Field
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette import status
+from starlette.responses import FileResponse
 
+from app.config import settings
 from app.database.session import get_db
-from app.services.file_service import upload_and_bind_user
-
-# 统一配置当前路由关心的外部常量
-APP_HOST = "http://localhost:8000"
+# 🚀 导入多态业务模型，让文件管理也能感知“万物皆对象”
+from app.models.business import AttachmentModel, DrawingModel, DocumentModel
+from app.services.file_service import save_physical_file, get_file_for_download
 
 router = APIRouter(prefix="/files", tags=["文件管理"])
 
+# 🎯 核心：统一维护的 URL 文件类型到真实 Python 类的多态映射映射
+FILE_TYPE_MAPPER = {
+    "attachment": AttachmentModel,
+    "drawing": DrawingModel,
+    "document": DocumentModel
+}
+
+
 class FileOut(BaseModel):
-    id: int
+    object_id: PyUUID
     original_name: str
     file_size: int
-    mime_type: str  # 👈 核心修正：mime_type 必须是字符串 (str)
-    file_url: str  # 👈 声明我们要给前端多返回一个动态拼接出来的公开网络 URL
+    stored_name: str = Field(exclude=True)
+    mime_type: str
     created_at: datetime
 
-    # 👈 核心修正：Pydantic v2 标准的、允许读取 ORM 属性的高级配置语法
+    @computed_field
+    def file_url(self) -> str:
+        return f"{settings.APP_HOST}/api/v1/files/download/{self.object_id}"
+
     model_config = ConfigDict(from_attributes=True)
 
-@router.post("/upload", response_model=FileOut, summary="单文件上传")
+
+# 🚀 【核心通用重构】：通过 {file_type} 动态路由适配所有文件节点
+@router.post("/{file_type}/upload", response_model=FileOut, summary="通用多态物理文件后补上传")
 async def upload_user_file(
+        file_type: str = Path(..., description="文件类型，可选值: attachment, drawing, document"),
+        object_id: PyUUID = Form(..., description="客户端在基表（objects）先行领到的全局唯一 UUID"),
         file: UploadFile = File(...),
-        bus_id: str = Form(...),
-        bus_type: str = Form(...),
         db: AsyncSession = Depends(get_db)
 ):
+    """
+    ### 通用文件上传网关
+    前端/插件先提交网状拓扑结构（Nodes/Relations 织网），随后异步调用此接口补全物理落盘。
+    系统会自动识别 `file_type` 并自适应解禁对应实体在基表中的 pending 状态。
+    """
+    # 1. 拦截不合法的类型
+    if file_type not in FILE_TYPE_MAPPER:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"不支持的文件类型: {file_type}。有效值请参考: {list(FILE_TYPE_MAPPER.keys())}"
+        )
+
+    # 2. 获取对应的多态子类
+    model_cls = FILE_TYPE_MAPPER[file_type]
+
     try:
-        # 调用业务层落盘与异步记账，拿到干净的 SQLAlchemy ORM 对象 (FileModel)
-        new_file = await upload_and_bind_user(db, file, bus_id, bus_type)
-
-        # 💡 高阶技巧：由于我们的 FileOut 契约中多写了一个数据库表里没有的字段 `file_url`，
-        # 我们需要在返回前，动态把这个属性“强行塞给”这个 ORM 对象实例。
-        # 这样 Pydantic 启动 attributes 读取时，就能完美捕捉到并返回给前端！
-        new_file.file_url = f"{APP_HOST}/static/uploads/{new_file.stored_name}"
-
-        # 自动执行字段剔除（如隐私的 stored_name 不会被发给前端）并格式化输出
+        # 3. 委托给自适应业务引擎
+        new_file = await save_physical_file(db, file, object_id, model_cls)
         return new_file
 
+    except ValueError as val_err:
+        # 处理 UUID 与类型不匹配的异常（例如：拿 attachment 的 UUID 去调 drawing 的上传接口）
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(val_err))
     except Exception as e:
-        # 职责严明：将任何底层或业务层逻辑失败，在看门人处翻译为标准的 HTTP 500
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
-@router.post("/download", response_model=FileOut, summary="单文件下载")
-async def downlod_user_file(
-        bus_id: str,
-        bus_type: str,
+
+@router.get("/download/{object_id}", response_class=FileResponse, summary="通过对象UUID下载/查看文件")
+async def download_file(
+        object_id: PyUUID,
+        db: AsyncSession = Depends(get_db)
 ):
-    # 这里我们不实现真正的下载逻辑了，因为 FastAPI 的 StaticFiles 已经帮我们做好了公开访问的路由
-    # 只要前端拿到 FileOut 里那个 file_url 就能直接访问了
-    pass;
+    """
+    车间扫码、图纸预览、附件下载的核心通用下载网关。
+    """
+    try:
+        db_file = await get_file_for_download(db, object_id)
+        return FileResponse(
+            path=db_file.absolute_path,
+            media_type=db_file.mime_type,
+            filename=db_file.original_name
+        )
+
+    except ValueError as val_err:
+        if str(val_err) == "File_Not_Found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="该文件在系统中无任何记账记录")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(val_err))
+
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="物理文件已从磁盘丢失或尚未传输完毕")
+
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))

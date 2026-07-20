@@ -1,18 +1,17 @@
 import os
-from uuid import uuid4
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 # 导入数据库相关组件
+
 from app.database.session import engine, get_db
 from app.models.base import Base
 from app.api.v1 import api_router
-from app.models.file import FileModel  # ⚠️ 必须导入，否则 Base 无法识别并建表
 
-UPLOAD_DIR = "./uploads"
-APP_HOST = "http://localhost:8000"
+UPLOAD_DIR = settings.UPLOAD_DIR  # 从配置中读取上传目录路径
+APP_HOST = settings.APP_HOST  # 从配置中读取应用主机地址
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
