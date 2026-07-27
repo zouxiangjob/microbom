@@ -31,7 +31,9 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
     只有这样，你删除零部件节点时，底层的边连线才能全自动触发 ON DELETE CASCADE 级联清理！
     """
     cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA foreign_keys=ON;")
+    cursor.execute("PRAGMA foreign_keys=ON;")   # 开启外键级联
+    cursor.execute("PRAGMA journal_mode=WAL;")  # 🔥 核心：开启 WAL 模式 (大幅提升读写并发性能)
+    cursor.execute("PRAGMA busy_timeout=5000;")  # 🔥 核心：等待锁的超时时间设为 5 秒，避免瞬间报错
     cursor.close()
 
 # ==============================================================================

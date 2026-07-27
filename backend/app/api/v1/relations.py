@@ -8,7 +8,7 @@ from starlette import status
 from app.api.v1.nodes import NodeResponseSchema
 from app.database.session import get_db
 from app.schemas.graph_batch import BatchCreatedResponse, GraphBatchCreateRequest, BatchUpdatedResponse, \
-    GraphBatchUpdateRequest, ReverseTreeNodeSchema
+    GraphBatchUpdateRequest, ReverseTreeNodeSchema, OverwriteSuccessResponse, GraphTopologyOverwriteRequest
 
 from app.schemas.graph_batch import RelationCreateSchema, RelationUpdateSchema, RelationResponseSchema
 
@@ -244,3 +244,41 @@ async def update_sub_graph_batch(
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail=f"原子批量更新处理遭遇意外崩溃: {str(e)}")
+
+
+@router.put("/nodes/{root_id}/overwrite", response_model=OverwriteSuccessResponse,
+            summary="🔄 方案 B: 根节点下游拓扑网络全量重写/僵尸数据清空网关")
+async def overwrite_sub_graph_topology(
+        root_id: uuid.UUID = Path(..., description="需要重写依赖图网的根节点 UUID（如父零件）"),
+        payload: GraphTopologyOverwriteRequest = None,
+        db: AsyncSession = Depends(get_db)
+):
+    """
+    ### 拓扑图谱全量洗牌重写网关 (Purge & Replace)
+    前端或 CAD 插件在重新保存 BOM、重新关联图纸时，直接将【当前最新的全量第一层子集结构】推过来。
+    后端会在强事务环境中全自动物理拔除该 root_id 散发的所有旧关系边连线，瞬间换上全量新线。
+    """
+    if not payload:
+        raise HTTPException(status_code=400, detail="请求体不能为空")
+    if root_id != payload.root_id:
+        raise HTTPException(status_code=400, detail="路径中的 root_id 与请求体 JSON 内的 root_id 不一致")
+
+    root_check = await db.get(ObjectModel, root_id)
+    if not root_check:
+        raise HTTPException(status_code=404, detail="指定的拓扑重写根节点在数据库中不存在")
+
+    try:
+        purged, inserted = await AsyncGraphCrudEngine.overwrite_graph_topology(
+            db=db,
+            node_mappers=NODE_MAPPER,
+            edge_mappers=RELATION_TYPE_MAPPER,
+            batch_data=payload
+        )
+        return {
+            "purged_old_edges_count": purged,
+            "inserted_new_edges_count": inserted
+        }
+    except ValueError as val_err:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(val_err))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"全量重写图失败: {str(e)}")
