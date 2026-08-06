@@ -2,16 +2,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # 1. 定义配置项和类型（可以设置默认值）
     PROJECT_NAME: str = "backend"
     APP_HOST: str = "http://localhost:8000"
     DATABASE_URL: str = "sqlite+aiosqlite:///./sql_app.db"
     UPLOAD_DIR: str = "./uploads"
+    EXPORT_DIR: str = "./uploads"
+    FACTORY_STORAGE_SECRET: str = ""  # ⚠️ 必须在 .env 文件中配置，切勿在源码中写死
+    MODEL_VIEWER_CDN: str = "https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"
 
-
-    # 2. 自动读取本地的 .env 环境文件
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
-# 实例化成一个全局可调用的对象
 settings = Settings()

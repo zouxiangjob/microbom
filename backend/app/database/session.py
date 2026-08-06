@@ -1,13 +1,18 @@
 import os
-from typing import AsyncGenerator
-from sqlalchemy import event  # 🔥 修正：必须从 sqlalchemy 中直接导入 event 模块
+from contextlib import contextmanager
+from typing import AsyncGenerator, Generator
+
+from sqlalchemy import event, create_engine
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-# 从配置中读取数据库路径，如果不存在则默认在本地 backend 下创建 sql_app.db
-# 你可以根据实际配置修改，通常格式为 sqlite+aiosqlite:///./sql_app.db
-DATABASE_URL = "sqlite+aiosqlite:///./sql_app.db"
+from app.config import settings
 
-# 1. 创建全异步数据库引擎
+DATABASE_URL = settings.DATABASE_URL
+
+# ==============================================================================
+# 1. 创建全异步数据库引擎 (供 FastAPI 路由层使用)
+# ==============================================================================
 engine = create_async_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False}  # SQLite 多线程并发防御必备参数
@@ -21,7 +26,23 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 # ==============================================================================
-# 3. 核心修正：正确配置 SQLite 异步环境下的物理外键级联监听总线
+# 3. 创建同步数据库引擎 (供 NiceGUI 视图层在事件循环内同步调用)
+# ==============================================================================
+SYNC_DATABASE_URL = DATABASE_URL.replace("sqlite+aiosqlite://", "sqlite://")
+sync_engine = create_engine(
+    SYNC_DATABASE_URL,
+    connect_args={"check_same_thread": False},
+    echo=False,
+)
+SyncSessionLocal = sessionmaker(
+    bind=sync_engine,
+    autoflush=False,
+    expire_on_commit=False,
+)
+
+
+# ==============================================================================
+# 4. 核心修正：正确配置 SQLite 异步环境下的物理外键级联监听总线
 # ==============================================================================
 # 注意：必须把事件绑定在 engine.sync_engine 上，且使用原生 event 模块
 @event.listens_for(engine.sync_engine, "connect")
@@ -36,8 +57,21 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor.execute("PRAGMA busy_timeout=5000;")  # 🔥 核心：等待锁的超时时间设为 5 秒，避免瞬间报错
     cursor.close()
 
+
 # ==============================================================================
-# 4. FastAPI 专用的依赖注入会话生成器
+# 5. 同步引擎上也激活外键 (供 NiceGUI 视图层使用)
+# ==============================================================================
+@event.listens_for(sync_engine, "connect")
+def set_sync_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON;")
+    cursor.execute("PRAGMA journal_mode=WAL;")
+    cursor.execute("PRAGMA busy_timeout=5000;")
+    cursor.close()
+
+
+# ==============================================================================
+# 6. FastAPI 专用的依赖注入会话生成器
 # ==============================================================================
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """
@@ -48,3 +82,16 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             yield session
         finally:
             await session.close()
+
+
+@contextmanager
+def get_sync_db() -> Generator[Session, None, None]:
+    """
+    NiceGUI 视图层专用的同步会话上下文管理器。
+    在事件循环已运行的环境中，使用同步引擎安全地访问数据库。
+    """
+    with SyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            session.close()

@@ -2,6 +2,7 @@ import uuid
 from typing import List, Optional, Type, TypeVar, Dict, Any
 from sqlalchemy import select, and_, literal_column  #修正：必须显式导入 literal_column
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 from app.models.base import ObjectModel, RelationModel
 
 # 定义泛型以支持完美的 IDE 类型推导
@@ -37,6 +38,67 @@ class AsyncGraphCrudEngine:
         stmt = select(model_cls).offset(offset).limit(limit)
         result = await db.execute(stmt)
         return list(result.scalars().all())
+
+    @staticmethod
+    def query_nodes_by_type_sync(db: Session, model_cls: Type[T_Node], limit: int = 100, offset: int = 0) -> List[T_Node]:
+        """同步分页查询同类节点：供 NiceGUI 视图层在事件循环内安全使用"""
+        stmt = select(model_cls).offset(offset).limit(limit)
+        result = db.execute(stmt)
+        return list(result.scalars().all())
+
+    @staticmethod
+    def get_node_by_id_sync(db: Session, model_cls: Type[T_Node], node_id: uuid.UUID) -> Optional[T_Node]:
+        """同步精准节点查询：供 NiceGUI 视图层使用"""
+        node = db.get(ObjectModel, node_id)
+        if isinstance(node, model_cls):
+            return node
+        return None
+
+    @staticmethod
+    def query_nodes_by_property_sync(
+            db: Session,
+            model_cls: Type[T_Node],
+            key: str,
+            value: str,
+    ) -> List[T_Node]:
+        """同步按 JSON 属性查询节点：在 SQLite 上使用 json_extract 定位匹配行"""
+        # SQLite JSON 提取: json_extract(properties, '$.key') == value
+        json_path = f"$.{key}"
+        stmt = select(model_cls).where(
+            model_cls.properties[key].as_string() == value
+        )
+        result = db.execute(stmt)
+        return list(result.scalars().all())
+
+    @staticmethod
+    def find_root_assemblies_sync(db: Session) -> List[ObjectModel]:
+        """
+        查找顶层总成：在 BOM 关系中作为起点，但从未作为任何 BOM 关系的终点。
+        即这些是产品树的根节点。
+        """
+        from app.models.business import BOMRelation
+        # 所有作为 BOM 关系终点的对象（即别人的子件）
+        child_stmt = select(RelationModel.target_id).where(
+            RelationModel.relation_type == BOMRelation.__mapper_args__["polymorphic_identity"]
+        )
+        child_result = db.execute(child_stmt)
+        child_ids = {row[0] for row in child_result.fetchall()}
+
+        # 所有作为 BOM 关系起点的对象
+        parent_stmt = select(RelationModel.source_id).where(
+            RelationModel.relation_type == BOMRelation.__mapper_args__["polymorphic_identity"]
+        )
+        parent_result = db.execute(parent_stmt)
+        parent_ids = {row[0] for row in parent_result.fetchall()}
+
+        # 根节点 = 父节点集合 - 子节点集合
+        root_ids = parent_ids - child_ids
+
+        if root_ids:
+            roots_stmt = select(ObjectModel).where(ObjectModel.id.in_(root_ids))
+            roots_result = db.execute(roots_stmt)
+            return list(roots_result.scalars().all())
+        return []
 
     @staticmethod
     async def update_node_properties(db: AsyncSession, node: ObjectModel, updates: Dict[str, Any]) -> ObjectModel:
@@ -92,6 +154,25 @@ class AsyncGraphCrudEngine:
             stmt = stmt.where(and_(*filters))
 
         result = await db.execute(stmt)
+        return list(result.scalars().all())
+
+    @staticmethod
+    def query_relations_sync(
+            db: Session,
+            model_cls: Type[T_Edge],
+            source_id: Optional[uuid.UUID] = None,
+            target_id: Optional[uuid.UUID] = None
+    ) -> List[T_Edge]:
+        """同步动态网状关系过滤：供 NiceGUI 视图层在事件循环内安全使用"""
+        stmt = select(model_cls)
+        filters = []
+        if source_id:
+            filters.append(model_cls.source_id == source_id)
+        if target_id:
+            filters.append(model_cls.target_id == target_id)
+        if filters:
+            stmt = stmt.where(and_(*filters))
+        result = db.execute(stmt)
         return list(result.scalars().all())
 
     @staticmethod
@@ -186,6 +267,69 @@ class AsyncGraphCrudEngine:
             })
         return tree_nodes
 
+    @staticmethod
+    def get_node_tree_by_cte_sync(
+            db: Session,
+            root_id: uuid.UUID,
+            max_depth: int = 10
+    ) -> List[Dict[str, Any]]:
+        """同步 CTE 正向 BOM 树穿透：供 NiceGUI 视图层在事件循环内安全使用"""
+        anchor_stmt = select(
+            RelationModel.id,
+            RelationModel.relation_type,
+            RelationModel.source_id,
+            RelationModel.target_id,
+            RelationModel.properties,
+            literal_column("1").label("depth")
+        ).where(RelationModel.source_id == root_id)
+
+        cte_expr = anchor_stmt.cte(name="graph_tree_cte_sync", recursive=True)
+
+        recursive_stmt = select(
+            RelationModel.id,
+            RelationModel.relation_type,
+            RelationModel.source_id,
+            RelationModel.target_id,
+            RelationModel.properties,
+            (cte_expr.c.depth + 1).label("depth")
+        ).join(cte_expr, RelationModel.source_id == cte_expr.c.target_id).where(
+            cte_expr.c.depth < max_depth
+        )
+
+        final_cte = cte_expr.union_all(recursive_stmt)
+
+        stmt = select(
+            final_cte.c.id.label("edge_id"),
+            final_cte.c.relation_type,
+            final_cte.c.source_id,
+            final_cte.c.target_id,
+            final_cte.c.properties.label("edge_properties"),
+            final_cte.c.depth,
+            ObjectModel.object_type.label("target_type"),
+            ObjectModel.properties.label("target_properties")
+        ).join(ObjectModel, ObjectModel.id == final_cte.c.target_id)
+
+        result = db.execute(stmt)
+
+        tree_nodes = []
+        for row in result.mappings():
+            tree_nodes.append({
+                "edge": {
+                    "id": row["edge_id"],
+                    "relation_type": row["relation_type"],
+                    "source_id": row["source_id"],
+                    "target_id": row["target_id"],
+                    "properties": row["edge_properties"]
+                },
+                "depth": row["depth"],
+                "target_node": {
+                    "id": row["target_id"],
+                    "object_type": row["target_type"],
+                    "properties": row["target_properties"]
+                }
+            })
+        return tree_nodes
+
     # ==================== 3. 拓扑图谱反查穿透 (Reverse Impact Analysis / Where-Used Query) 业务逻辑 ====================
     @staticmethod
     async def get_reverse_node_tree_by_cte(
@@ -252,6 +396,69 @@ class AsyncGraphCrudEngine:
                 },
                 "depth": row["depth"],
                 "source_node": {  # 🔥 返回给前端：当前层级捕获到的“上级父节点”
+                    "id": row["source_id"],
+                    "object_type": row["source_type"],
+                    "properties": row["source_properties"]
+                }
+            })
+        return tree_nodes
+
+    @staticmethod
+    def get_reverse_node_tree_by_cte_sync(
+            db: Session,
+            leaf_id: uuid.UUID,
+            max_depth: int = 10
+    ) -> List[Dict[str, Any]]:
+        """同步逆向 CTE 追溯：供 NiceGUI 视图层在事件循环内安全使用"""
+        anchor_stmt = select(
+            RelationModel.id,
+            RelationModel.relation_type,
+            RelationModel.source_id,
+            RelationModel.target_id,
+            RelationModel.properties,
+            literal_column("1").label("depth")
+        ).where(RelationModel.target_id == leaf_id)
+
+        cte_expr = anchor_stmt.cte(name="reverse_graph_tree_cte_sync", recursive=True)
+
+        recursive_stmt = select(
+            RelationModel.id,
+            RelationModel.relation_type,
+            RelationModel.source_id,
+            RelationModel.target_id,
+            RelationModel.properties,
+            (cte_expr.c.depth + 1).label("depth")
+        ).join(cte_expr, RelationModel.target_id == cte_expr.c.source_id).where(
+            cte_expr.c.depth < max_depth
+        )
+
+        final_cte = cte_expr.union_all(recursive_stmt)
+
+        stmt = select(
+            final_cte.c.id.label("edge_id"),
+            final_cte.c.relation_type,
+            final_cte.c.source_id,
+            final_cte.c.target_id,
+            final_cte.c.properties.label("edge_properties"),
+            final_cte.c.depth,
+            ObjectModel.object_type.label("source_type"),
+            ObjectModel.properties.label("source_properties")
+        ).join(ObjectModel, ObjectModel.id == final_cte.c.source_id)
+
+        result = db.execute(stmt)
+
+        tree_nodes = []
+        for row in result.mappings():
+            tree_nodes.append({
+                "edge": {
+                    "id": row["edge_id"],
+                    "relation_type": row["relation_type"],
+                    "source_id": row["source_id"],
+                    "target_id": row["target_id"],
+                    "properties": row["edge_properties"]
+                },
+                "depth": row["depth"],
+                "source_node": {
                     "id": row["source_id"],
                     "object_type": row["source_type"],
                     "properties": row["source_properties"]
@@ -492,3 +699,96 @@ class AsyncGraphCrudEngine:
             # 🚨 防御熔断：哪怕新连线里有一个 UUID 写错，老网络瞬间完好无损地就地复活！
             await db.rollback()
             raise overwrite_err
+
+    # ==================== 4. BOM 打平与汇总引擎 ====================
+
+    @staticmethod
+    def flatten_bom_sync(db: Session) -> List[Dict[str, Any]]:
+        """
+        全量 BOM 打平汇总：遍历所有顶层总成，递归展开 BOM 树，
+        按零件编码聚合数量，返回去重后的采购清单。
+        """
+        from app.models.business import BOMRelation, PartModel
+
+        roots = AsyncGraphCrudEngine.find_root_assemblies_sync(db)
+        # 如果没有根节点，回退为查询所有 PartModel
+        if not roots:
+            roots = AsyncGraphCrudEngine.query_nodes_by_type_sync(db, PartModel, limit=1000)
+
+        aggregated: Dict[str, Dict[str, Any]] = {}
+
+        for root in roots:
+            tree = AsyncGraphCrudEngine.get_node_tree_by_cte_sync(db, root.id, max_depth=20)
+            # 根节点本身也可能需要采购（如果是外购件）
+            root_props = root.properties if root.properties else {}
+            root_code = root_props.get("part_number", "") or str(root.id)[:8]
+            _aggregate_part(aggregated, root, root_props, 1)
+
+            for node in tree:
+                target = node["target_node"]
+                edge_props = node.get("edge", {}).get("properties", {})
+                quantity = edge_props.get("quantity", 1) if isinstance(edge_props, dict) else 1
+                target_props = target.get("properties", {}) if isinstance(target.get("properties"), dict) else {}
+                tgt_id = target["id"]
+                tgt_node = db.get(ObjectModel, tgt_id)
+                if tgt_node:
+                    _aggregate_part(aggregated, tgt_node, target_props, quantity)
+
+        rows = []
+        for code, entry in aggregated.items():
+            rows.append({
+                "code": code,
+                "name": entry["name"],
+                "spec": entry["spec"],
+                "qty": entry["qty"],
+                "unit": entry["unit"],
+            })
+        return rows
+
+
+# ==============================================================================
+# 5. 工具函数（模块级别）
+# ==============================================================================
+
+def _aggregate_part(aggregated: Dict[str, Dict[str, Any]], node: ObjectModel, props: Dict[str, Any], qty: int) -> None:
+    """将节点按 part_number 聚合到累计字典中"""
+    code = props.get("part_number", "") or str(node.id)[:8]
+    if code not in aggregated:
+        aggregated[code] = {
+            "name": props.get("name", ""),
+            "spec": props.get("spec", ""),
+            "qty": 0,
+            "unit": props.get("unit", "个"),
+        }
+    aggregated[code]["qty"] += qty
+
+
+def cte_flat_to_nested_tree(flat_nodes: List[Dict[str, Any]], root_id: uuid.UUID) -> List[Dict[str, Any]]:
+    """
+    将 CTE 穿透返回的平铺列表转换为 NiceGUI ui.tree 所需的嵌套结构。
+    每个 flat node 包含: {edge, depth, target_node}
+    """
+    # 按 source_id 分组，建立 parent -> children 映射
+    children_map: Dict[str, List[Dict[str, Any]]] = {}
+    for node in flat_nodes:
+        src_id = str(node["edge"]["source_id"])
+        if src_id not in children_map:
+            children_map[src_id] = []
+        children_map[src_id].append(node)
+
+    def _build_subtree(node_id: str) -> List[Dict[str, Any]]:
+        children = children_map.get(node_id, [])
+        result = []
+        for child in children:
+            target = child["target_node"]
+            target_props = target.get("properties", {}) if isinstance(target.get("properties"), dict) else {}
+            label = target_props.get("part_number") or target_props.get("name") or str(target["id"])[:8]
+            child_id = str(target["id"])
+            result.append({
+                "id": child_id,
+                "label": label,
+                "children": _build_subtree(child_id),
+            })
+        return result
+
+    return _build_subtree(str(root_id))
