@@ -11,7 +11,7 @@ from sqlalchemy import select as sa_select
 
 from app.config import settings
 from app.database.session import get_sync_db
-from app.models.base import ObjectModel, FileModel
+from app.models.base import ObjectModel, FileModel, RelationModel
 from app.models.business import (
     PartModel, DocumentModel, DrawingModel,
     BOMRelation, PartDocRelation, PartDrawingRelation,
@@ -23,11 +23,32 @@ from app.views.components import (
     render_card_header,
     render_file_row,
     render_industrial_table,
+    render_preview_dialog,
 )
 from app.views.styles import SECTION_HEADER_CLASSES
 
+# ── 模块级状态：追踪右侧面板当前查看的节点 ID + 刷新回调 ──
+_current_view_node_id: str = ""
+_refresh_right_panel_fn: Callable[[str], None] | None = None
+
+
+def _clear_view_state() -> None:
+    """清除模块级查看状态（返回列表时调用）。"""
+    global _current_view_node_id, _refresh_right_panel_fn
+    _current_view_node_id = ""
+    _refresh_right_panel_fn = None
+
+
+def _do_refresh_right_panel(part_id_str: str) -> None:
+    """模块级入口：供 _handle_upload / _handle_remove_file 等外层函数调用。"""
+    if _refresh_right_panel_fn and part_id_str:
+        _refresh_right_panel_fn(part_id_str)
+
 
 def render_engineer_detail_page() -> None:
+    global _current_view_node_id
+    _current_view_node_id = ""  # 每次进入页面时重置
+
     render_header('engineer')
 
     node_detail = _load_node_detail()
@@ -113,6 +134,9 @@ def _load_drawings(session, part_id: uuid.UUID) -> List[Dict[str, Any]]:
             'version': d_props.get('version', 'A.0'),
             'size': file_size,
             'url': file_url,
+            'mime_type': file_record.mime_type or '',
+            'relation_id': str(rel.id),
+            'target_id': str(rel.target_id),
         })
     return drawings
 
@@ -135,6 +159,9 @@ def _load_documents(session, part_id: uuid.UUID) -> List[Dict[str, Any]]:
             'name': file_record.original_name,
             'tag': d_props.get('tag', '技术文档'),
             'url': file_url,
+            'mime_type': file_record.mime_type or '',
+            'relation_id': str(rel.id),
+            'target_id': str(rel.target_id),
         })
     return documents
 
@@ -344,10 +371,11 @@ async def _handle_upload(
             # 同一事务提交
             session.commit()
 
-        # 4. 关闭对话框并刷新页面
+        # 4. 关闭对话框并定向刷新右侧面板（避免全页重载后跳回总节点）
         dialog.close()
         ui.notify(f'✅ {filename} 上传成功！', type='positive', position='top')
-        ui.navigate.reload()
+        # 优先刷新当前查看的子节点面板；若在总节点则刷新总节点面板
+        _do_refresh_right_panel(_current_view_node_id or part_id_str)
 
     except Exception as exc:
         ui.notify(f'❌ 上传失败: {str(exc)}', type='negative', position='top')
@@ -390,6 +418,52 @@ def _create_upload_dialog(
     return dialog
 
 
+def _handle_remove_file(
+    relation_id: str,
+    target_id: str,
+    file_name: str,
+) -> None:
+    """移除文件关联：删除关系边 → 删除目标节点（级联删除 FileModel）→ 删除物理文件。"""
+    try:
+        rel_uuid = uuid.UUID(relation_id)
+        target_uuid = uuid.UUID(target_id)
+
+        with get_sync_db() as session:
+            # 1. 查找并删除关系边
+            relation = session.get(RelationModel, rel_uuid)
+            if relation:
+                session.delete(relation)
+
+            # 2. 查找目标节点（图纸/文档）及其关联的物理文件路径
+            target_node = session.get(ObjectModel, target_uuid)
+            physical_path = None
+            if target_node:
+                file_record = session.get(FileModel, target_uuid)
+                if file_record and file_record.absolute_path:
+                    physical_path = file_record.absolute_path
+                # 删除节点 → ON DELETE CASCADE 自动清理 FileModel 和其他关系
+                session.delete(target_node)
+
+            session.commit()
+
+        # 3. 事务提交成功后再删除物理文件（避免事务回滚后文件已丢失）
+        if physical_path and os.path.exists(physical_path):
+            try:
+                os.remove(physical_path)
+            except OSError:
+                pass  # 物理文件删除失败不阻断流程
+
+        ui.notify(f'✅ 已移除文件: {file_name}', type='positive', position='top')
+        if _current_view_node_id:
+            _do_refresh_right_panel(_current_view_node_id)
+        else:
+            # 总节点视图下没有可追踪的子节点 ID，回退全页重载
+            ui.navigate.reload()
+
+    except Exception as exc:
+        ui.notify(f'❌ 移除文件失败: {str(exc)}', type='negative', position='top')
+
+
 # ============================================================
 # 页面渲染函数
 # ============================================================
@@ -400,12 +474,14 @@ def _render_breadcrumb(node_detail: Dict[str, Any]) -> None:
             ui.link('📟 设计资产库', '/engineer').classes('text-blue-700 underline')
             ui.label('/')
             ui.label(f"装配体详情: {node_detail.get('code', '')}").classes('text-gray-900 font-black')
-        ui.button('返回列表', on_click=lambda: ui.navigate.to('/engineer')).classes(
+        ui.button('返回列表', on_click=lambda: (_clear_view_state(), ui.navigate.to('/engineer'))).classes(
             'bg-gray-700 text-white font-bold text-xs px-3 py-1 rounded shadow'
         )
 
 
 def _render_main_layout(node_detail: Dict[str, Any]) -> None:
+    global _refresh_right_panel_fn
+
     # 闭包捕获右侧面板引用的容器（在 row 内部创建后才赋值）
     _right_panel_ref: List[Any] = [None]
 
@@ -424,9 +500,14 @@ def _render_main_layout(node_detail: Dict[str, Any]) -> None:
             _render_documents_section(new_detail)
             _render_child_bom_section(new_detail)
 
+    # 注册模块级刷新回调，供 _handle_upload / _handle_remove_file 调用
+    _refresh_right_panel_fn = _refresh_right_panel
+
     def _on_node_click(node_id: str) -> None:
-        """树节点点击回调：刷新右侧图文档面板。"""
+        """树节点点击回调：刷新右侧图文档面板，并记住当前查看的节点 ID。"""
+        global _current_view_node_id
         if node_id:
+            _current_view_node_id = node_id
             _refresh_right_panel(node_id)
 
     with ui.row().classes('w-full p-4 gap-4 items-start'):
@@ -484,6 +565,7 @@ def _render_drawings_section(node_detail: Dict[str, Any]) -> None:
             ui.label('暂无关联图纸').classes('text-gray-400 italic text-sm p-2')
         else:
             for dwg in drawings:
+                preview_dialog = render_preview_dialog(dwg['url'], dwg['name'])
                 render_file_row(
                     icon_name='picture_as_pdf',
                     icon_color='blue-7',
@@ -492,7 +574,11 @@ def _render_drawings_section(node_detail: Dict[str, Any]) -> None:
                     meta_classes='text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded',
                     button_text='在线预览',
                     button_classes='text-blue-900 font-black text-sm border border-blue-300 px-3 py-1 rounded',
-                    on_click=lambda d=dwg: ui.navigate.to(d['url'], new_tab=True),
+                    on_click=lambda pd=preview_dialog: pd.open(),
+                    remove_button_text='🗑 移除',
+                    on_remove_click=lambda d=dwg: _handle_remove_file(
+                        d['relation_id'], d['target_id'], d['name']
+                    ),
                 )
 
 
@@ -514,6 +600,7 @@ def _render_documents_section(node_detail: Dict[str, Any]) -> None:
             ui.label('暂无关联文档').classes('text-gray-400 italic text-sm p-2')
         else:
             for doc in documents:
+                preview_dialog = render_preview_dialog(doc['url'], doc['name'])
                 render_file_row(
                     icon_name='insert_drive_file',
                     icon_color='green-7',
@@ -522,7 +609,11 @@ def _render_documents_section(node_detail: Dict[str, Any]) -> None:
                     meta_classes='text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded',
                     button_text='查看文档',
                     button_classes='text-green-900 font-black text-sm border border-green-300 px-3 py-1 rounded',
-                    on_click=lambda d=doc: ui.navigate.to(d['url'], new_tab=True),
+                    on_click=lambda pd=preview_dialog: pd.open(),
+                    remove_button_text='🗑 移除',
+                    on_remove_click=lambda d=doc: _handle_remove_file(
+                        d['relation_id'], d['target_id'], d['name']
+                    ),
                 )
 
 

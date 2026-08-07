@@ -82,18 +82,25 @@ async def upload_user_file(
 @router.get("/download/{object_id}", response_class=FileResponse, summary="通过对象UUID下载/查看文件")
 async def download_file(
         object_id: PyUUID,
+        inline: bool = True,
         db: AsyncSession = Depends(get_db)
 ):
     """
     车间扫码、图纸预览、附件下载的核心通用下载网关。
+
+    - `inline=true`（默认）：浏览器内联显示（不触发下载弹窗）
+    - `inline=false`：强制下载（Content-Disposition: attachment）
     """
     try:
         db_file = await get_file_for_download(db, object_id)
-        return FileResponse(
+        # inline 模式下不传 filename → Starlette 不设 Content-Disposition → 浏览器内联渲染
+        kwargs: Dict[str, Any] = dict(
             path=db_file.absolute_path,
             media_type=db_file.mime_type,
-            filename=db_file.original_name
         )
+        if not inline:
+            kwargs["filename"] = db_file.original_name
+        return FileResponse(**kwargs)
 
     except ValueError as val_err:
         if str(val_err) == "File_Not_Found":

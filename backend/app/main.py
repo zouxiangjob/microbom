@@ -19,16 +19,38 @@ from app.views.engineer import render_engineer_page
 
 
 
-UPLOAD_DIR = settings.UPLOAD_DIR  # 从配置中读取上传目录路径
-APP_HOST = settings.APP_HOST  # 从配置中读取应用主机地址
+UPLOAD_DIR = settings.UPLOAD_DIR  # 从 config 读取，已是绝对路径
+APP_HOST = settings.APP_HOST
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 启动时：确保本地上传文件夹存在
+    # 启动时：确保上传目录存在
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    # 启动时：自动在 backend/ 下创建 sql_app.db 文件并建立 files 数据表
+    # 启动时：自动建表
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    # 启动时：修复历史数据中的相对存储路径为绝对路径
+    from app.database.session import sync_engine
+    from sqlalchemy import select, update
+    from app.models.base import FileModel
+    with sync_engine.connect() as sync_conn:
+        result = sync_conn.execute(
+            select(FileModel.object_id, FileModel.absolute_path).where(
+                FileModel.absolute_path.like("./%")
+            )
+        )
+        fixed = 0
+        for row in result:
+            abs_path = os.path.abspath(row[1])
+            sync_conn.execute(
+                update(FileModel)
+                .where(FileModel.object_id == row[0])
+                .values(absolute_path=abs_path)
+            )
+            fixed += 1
+        if fixed:
+            sync_conn.commit()
+            print(f"[startup] 已修复 {fixed} 条历史文件路径为绝对路径")
 
     yield
     # 关闭时：释放引擎
@@ -41,11 +63,12 @@ app = FastAPI(title="MicroBOM API", lifespan=lifespan)
 # 1. 激活并挂载全局异常拦截机制
 setup_exception_handlers(app)
 
-# 2. 补齐生产级跨域中间件，彻底解决前后端分离部署导致的拒绝请求问题
+# 2. 动态 CORS：反射请求 Origin，兼容 localhost 和 data: URI 的 null origin
+#    注意 allow_credentials=True 不能与 allow_origins=["*"] 共存（CORS 规范禁止）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 联调时允许全域名，生产环境建议换成确切的前端域名
-    allow_credentials=True,
+    allow_origin_regex=r".*",  # 反射所有 Origin（包括 null），匹配 localhost / 127.0.0.1 / data: URI
+    allow_credentials=False,   # 关闭凭证 — API 不走 cookie 认证，避免 null origin 被 Chrome 拦截
     allow_methods=["*"],
     allow_headers=["*"],
 )
