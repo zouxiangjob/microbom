@@ -51,8 +51,9 @@ async def save_physical_file(
 
     if existing_file and os.path.exists(existing_file.absolute_path):
         # 🎯 物理去重命中：磁盘上已有相同文件，直接复用其绝对路径，不进行任何磁盘写操作！
+        # stored_name 有 UNIQUE 约束：新记录须用「对象 ID 前缀」生成独立名，避免唯一键冲突
         file_save_path = existing_file.absolute_path
-        unique_filename = existing_file.stored_name
+        unique_filename = f"{md5_hash}_{object_id.hex[:8]}{file_extension}"
         is_duplicate = True
     else:
         # 💾 物理去重未命中：新文件，执行物理落盘
@@ -66,7 +67,17 @@ async def save_physical_file(
         if not obj_node:
             raise ValueError(f"Object_Node_Not_Found: 在类型 {model_cls.__name__} 中未找到该 UUID")
 
-        # 3.2 写入文件元数据表（即使物理文件复用，每个虚拟节点仍有自己独立的文件记录名）
+        # 3.2 覆盖上传：对象与文件是 1:1（files.object_id 为主键），
+        #     若该对象已关联旧文件，先删除旧记录，提交成功后再清理旧物理文件
+        old_file = (await db.execute(
+            select(FileModel).where(FileModel.object_id == object_id)
+        )).scalar_one_or_none()
+        old_physical_path = old_file.absolute_path if old_file else None
+        if old_file:
+            await db.delete(old_file)
+            await db.flush()
+
+        # 3.3 写入文件元数据表
         db_file = FileModel(
             object_id=object_id,
             original_name=original_name,
@@ -77,7 +88,7 @@ async def save_physical_file(
         )
         db.add(db_file)
 
-        # 3.3 自适应解禁多态关联节点的状态
+        # 3.4 自适应解禁多态关联节点的状态
         props = dict(obj_node.properties) if obj_node.properties else {}
         props["file_status"] = "ready"
         props["status"] = "ready"
@@ -90,6 +101,19 @@ async def save_physical_file(
 
         await db.commit()
         await db.refresh(db_file)
+
+        # 3.5 提交成功后清理被替换掉的旧物理文件：
+        #     仅当该物理文件不再被任何记录引用（且不同于当前路径）时才删除，避免误删秒传共享文件
+        if old_physical_path and old_physical_path != file_save_path and os.path.exists(old_physical_path):
+            refs = (await db.execute(
+                select(FileModel).where(FileModel.absolute_path == old_physical_path)
+            )).scalars().all()
+            if not refs:
+                try:
+                    os.remove(old_physical_path)
+                except OSError:
+                    pass
+
         return db_file
 
     except Exception as db_err:
