@@ -28,12 +28,14 @@
             <el-button type="primary" :icon="Upload" :loading="uploading">上传文件</el-button>
           </el-upload>
           <template v-if="fileInfo">
-            <el-button :icon="View" @click="openFile(true)">预览</el-button>
-            <el-button :icon="Download" @click="openFile(false)">下载</el-button>
+            <el-button :icon="View" @click="previewVisible = true">预览</el-button>
+            <el-button :icon="Download" @click="download">下载</el-button>
           </template>
         </div>
       </section>
     </div>
+
+    <FilePreviewDialog v-model="previewVisible" :file-name="fileInfo?.original_name || p.name" :object-id="nodeId" />
   </DetailLayout>
 </template>
 
@@ -43,6 +45,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Upload, View, Download } from '@element-plus/icons-vue'
 import DetailLayout from './DetailLayout.vue'
+import FilePreviewDialog from './FilePreviewDialog.vue'
 import { getNode } from '../api/nodes'
 import { uploadFile, fileUrl, getFileMeta } from '../api/files'
 import { nodeDisplayName } from '../api/mapping'
@@ -110,9 +113,11 @@ const doUpload = async ({ file }) => {
   }
 }
 
-// 预览 / 下载：inline=true 浏览器内联渲染，inline=false 强制下载
-const openFile = (inline) => {
-  window.open(fileUrl(nodeId, inline), '_blank')
+// 预览走 FilePreviewDialog（按扩展名分派渲染）；下载强制 attachment
+const previewVisible = ref(false)
+
+const download = () => {
+  window.open(fileUrl(nodeId, false), '_blank')
 }
 
 const formatSize = (bytes) => {

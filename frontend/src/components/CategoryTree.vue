@@ -23,6 +23,8 @@
           <!-- 节点旁操作按钮：默认缩略隐藏，hover 时展开 -->
           <span class="node-actions">
             <el-icon title="新建子分类" @click.stop="addChild(data)"><Plus /></el-icon>
+            <el-icon title="添加零部件" @click.stop="addPart(data)"><CirclePlus /></el-icon>
+            <el-icon title="移除零部件" @click.stop="removePart(data)"><CircleClose /></el-icon>
             <el-icon title="重命名" @click.stop="rename(data)"><Edit /></el-icon>
             <el-icon title="删除" @click.stop="remove(data)"><Delete /></el-icon>
           </span>
@@ -31,15 +33,39 @@
     </el-tree>
 
     <el-empty v-if="!loading && !treeData.length" description="暂无分类，点击「新建分类」创建" :image-size="50" />
+
+    <!-- 添加零部件到分类 -->
+    <el-dialog v-model="addPartVisible" :title="`添加零部件到「${activePartNode?.label || ''}」`" width="480px">
+      <el-select v-model="selectedPartId" filterable placeholder="搜索并选择零部件" style="width: 100%">
+        <el-option v-for="p in allParts" :key="p.id" :label="nodeLabel(p)" :value="p.id" />
+      </el-select>
+      <template #footer>
+        <el-button @click="addPartVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!selectedPartId" @click="confirmAddPart">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 从分类移除零部件 -->
+    <el-dialog v-model="removePartVisible" :title="`移除「${activePartNode?.label || ''}」下的零部件`" width="480px">
+      <el-empty v-if="!activeCategoryParts.length" description="该分类暂无关联零部件" :image-size="50" />
+      <el-select v-else v-model="selectedRemovePartId" filterable placeholder="选择要移除的零部件" style="width: 100%">
+        <el-option v-for="p in activeCategoryParts" :key="p.id" :label="nodeLabel(p)" :value="p.id" />
+      </el-select>
+      <template #footer>
+        <el-button @click="removePartVisible = false">取消</el-button>
+        <el-button type="danger" :disabled="!selectedRemovePartId" @click="confirmRemovePart">移除</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, watch, nextTick, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Plus, Edit, Delete } from '@element-plus/icons-vue'
+import { Search, Plus, Edit, Delete, CirclePlus, CircleClose } from '@element-plus/icons-vue'
 import { listNodes, createNode, updateNode, deleteNode } from '../api/nodes'
-import { listRelations, createRelation } from '../api/relations'
+import { listRelations, createRelation, deleteRelation } from '../api/relations'
+import { nodeLabel } from '../api/mapping'
 
 // 通用「树节点增删改查」组件：通过 props 指向任意的后端对象类型 + 父子关系类型，即可复用为
 // 分类树 / BOM 树 / 文档层级等任意树结构。
@@ -55,11 +81,15 @@ const props = defineProps({
   /** 后端父子关系类型（对应 GET/POST /relations/{relationType}，source=父 → target=子） */
   relationType: { type: String, default: 'category_relation' },
   /** 节点 properties 中用作展示名称的键 */
-  labelKey: { type: String, default: 'name' }
+  labelKey: { type: String, default: 'name' },
+  /** 关联的零部件对象类型（「添加/移除零部件」用） */
+  partObjectType: { type: String, default: 'part' },
+  /** 分类 → 零部件的关联关系类型 */
+  partRelationType: { type: String, default: 'category_part_relation' }
 })
 
-/** 点击树节点时抛出该节点（{ id, label, children }） */
-const emit = defineEmits(['select'])
+/** select：点击节点；change：增删改或零部件关联变化后通知父组件刷新 */
+const emit = defineEmits(['select', 'change'])
 
 const treeRef = ref()
 const treeData = ref([])
@@ -187,6 +217,74 @@ const remove = async (data) => {
 
 const onNodeClick = (data) => {
   emit('select', data)
+}
+
+// ── 分类 ↔ 零部件关联（添加/移除）──
+const addPartVisible = ref(false)
+const removePartVisible = ref(false)
+const activePartNode = ref(null)
+const allParts = ref([])
+const activeCategoryParts = ref([])
+const selectedPartId = ref(null)
+const selectedRemovePartId = ref(null)
+
+const ensureAllParts = async () => {
+  if (allParts.value.length) return allParts.value
+  try {
+    allParts.value = (await listNodes(props.partObjectType, { limit: 1000 })) || []
+  } catch (e) {
+    ElMessage.error(e.message || '加载零部件列表失败')
+  }
+  return allParts.value
+}
+
+const addPart = async (node) => {
+  activePartNode.value = node
+  selectedPartId.value = null
+  await ensureAllParts()
+  addPartVisible.value = true
+}
+
+const confirmAddPart = async () => {
+  if (!activePartNode.value || !selectedPartId.value) return
+  try {
+    await createRelation(props.partRelationType, activePartNode.value.id, selectedPartId.value, {})
+    ElMessage.success('已添加零部件')
+    addPartVisible.value = false
+    emit('change', activePartNode.value)
+  } catch (e) {
+    ElMessage.error(e.message || '添加失败')
+  }
+}
+
+const removePart = async (node) => {
+  activePartNode.value = node
+  selectedRemovePartId.value = null
+  activeCategoryParts.value = []
+  removePartVisible.value = true
+  try {
+    const edges = (await listRelations(props.partRelationType, { sourceId: node.id })) || []
+    const edgeByTarget = new Map(edges.map((e) => [e.target_id, e.id]))
+    const parts = await ensureAllParts()
+    activeCategoryParts.value = parts
+      .filter((p) => edgeByTarget.has(p.id))
+      .map((p) => ({ id: p.id, edgeId: edgeByTarget.get(p.id), ...p }))
+  } catch (e) {
+    ElMessage.error(e.message || '加载关联零部件失败')
+  }
+}
+
+const confirmRemovePart = async () => {
+  const target = activeCategoryParts.value.find((p) => p.id === selectedRemovePartId.value)
+  if (!target) return
+  try {
+    await deleteRelation(props.partRelationType, target.edgeId)
+    ElMessage.success('已移除零部件')
+    removePartVisible.value = false
+    emit('change', activePartNode.value)
+  } catch (e) {
+    ElMessage.error(e.message || '移除失败')
+  }
 }
 
 const filterNode = (value, data) => {

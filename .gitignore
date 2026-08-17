@@ -13,4 +13,5 @@ uploads/
 *.db-shm
 .nicegui/
 dist/
+temp/
 openapi.json

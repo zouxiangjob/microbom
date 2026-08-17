@@ -18,19 +18,12 @@
           </el-menu>
         </el-aside>
 
-        <el-aside v-if="showTree" width="220px" class="tree-aside">
-          <div class="tree-header">分类</div>
-          <el-menu
-            :default-active="selectedCategory || '__all__'"
-            class="category-menu"
-            @select="onCategorySelect"
-          >
-            <el-menu-item index="__all__">全部分类</el-menu-item>
-            <el-menu-item v-for="c in categoryOptions" :key="c.name" :index="c.name">
-              <span>{{ c.name }}</span>
-              <span class="category-count">{{ c.count }}</span>
-            </el-menu-item>
-          </el-menu>
+        <el-aside v-if="showTree" width="260px" class="tree-aside">
+          <div class="tree-header">
+            <span class="tree-title">分类</span>
+            <el-button size="small" @click="clearCategory">全部零部件</el-button>
+          </div>
+          <CategoryTree @select="onCategorySelect" @change="onCategoryChange" />
         </el-aside>
 
         <el-main class="main-content">
@@ -97,7 +90,9 @@ import {
   HomeFilled, Management
 } from '@element-plus/icons-vue'
 import { listNodes, createNode, NODE_TYPES } from '../api/nodes'
+import { listRelations, RELATION_TYPES } from '../api/relations'
 import { nodeToRow, documentToRow, drawingToRow } from '../api/mapping'
+import CategoryTree from './CategoryTree.vue'
 
 const router = useRouter()
 
@@ -149,24 +144,10 @@ const COLUMN_CONFIGS = {
 }
 const columns = computed(() => COLUMN_CONFIGS[activeType.value] || COLUMN_CONFIGS[NODE_TYPES.PART])
 
-// 分类侧栏：从已加载的零部件行里按 category 属性聚合出分类（后端暂无 category 节点表）
-const selectedCategory = ref('')
-const categoryOptions = computed(() => {
-  if (activeType.value !== NODE_TYPES.PART) return []
-  const counts = new Map()
-  for (const r of allRows.value) {
-    const c = (r.category || '').trim()
-    if (c) counts.set(c, (counts.get(c) || 0) + 1)
-  }
-  return [...counts.entries()]
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => a.name.localeCompare(b.name))
-})
-
-const onCategorySelect = (index) => {
-  selectedCategory.value = index === '__all__' ? '' : index
-  applyFilter()
-}
+// ── 分类树 + 分类↔零部件关联 ──
+const selectedCategoryId = ref(null)   // null = 全部零部件
+const selectedCategoryName = ref('')
+const categoryParts = ref([])          // 选中分类关联的零部件（含 edgeId）
 
 // 表格数据：allRows 缓存后端全量，tableData 为过滤后，pagedData 为分页后
 const allRows = ref([])
@@ -175,6 +156,11 @@ const loading = ref(false)
 const currentPage = ref(1)
 const pageSize = ref(10)
 
+// 当前展示数据源：选中分类 → 该分类关联零部件；否则 → 全部零部件
+const activeRows = computed(() =>
+  selectedCategoryId.value ? categoryParts.value : allRows.value
+)
+
 const pagedData = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
   return tableData.value.slice(start, start + pageSize.value)
@@ -182,11 +168,8 @@ const pagedData = computed(() => {
 
 const applyFilter = () => {
   const kw = (searchForm.code || '').trim().toLowerCase()
-  const cat = selectedCategory.value
-  tableData.value = allRows.value.filter((r) => {
-    const matchKw = !kw || Object.values(r).some((v) => String(v).toLowerCase().includes(kw))
-    const matchCat = !cat || (r.category || '') === cat
-    return matchKw && matchCat
+  tableData.value = activeRows.value.filter((r) => {
+    return !kw || Object.values(r).some((v) => String(v).toLowerCase().includes(kw))
   })
   currentPage.value = 1
 }
@@ -217,7 +200,9 @@ const loadData = async () => {
 const handleMenuSelect = (index) => {
   activeMenu.value = index
   searchForm.code = ''
-  selectedCategory.value = ''
+  selectedCategoryId.value = null
+  selectedCategoryName.value = ''
+  categoryParts.value = []
   currentPage.value = 1
   loadData()
 }
@@ -287,6 +272,42 @@ const navigateToDetail = (row) => {
   router.push(`${base}/${row.id}`)
 }
 
+// ── 分类 ↔ 零部件关联管理 ──
+const onCategorySelect = (data) => {
+  selectedCategoryId.value = data?.id || null
+  selectedCategoryName.value = data?.label || ''
+  if (selectedCategoryId.value) loadCategoryParts(selectedCategoryId.value)
+  else applyFilter()
+}
+
+const clearCategory = () => {
+  selectedCategoryId.value = null
+  selectedCategoryName.value = ''
+  categoryParts.value = []
+  applyFilter()
+}
+
+const loadCategoryParts = async (categoryId) => {
+  try {
+    const edges = (await listRelations(RELATION_TYPES.CATEGORY_PART, { sourceId: categoryId })) || []
+    const edgeByTarget = new Map(edges.map((e) => [e.target_id, e.id]))
+    categoryParts.value = allRows.value
+      .filter((r) => edgeByTarget.has(r.id))
+      .map((r) => ({ ...r, edgeId: edgeByTarget.get(r.id) }))
+    applyFilter()
+  } catch (e) {
+    ElMessage.error(e.message || '加载分类零部件失败')
+    categoryParts.value = []
+  }
+}
+
+const onCategoryChange = (node) => {
+  // 分类增删改或零部件关联变化后，若正好是当前选中的分类，则刷新右侧列表
+  if (selectedCategoryId.value === node?.id) {
+    loadCategoryParts(selectedCategoryId.value)
+  }
+}
+
 onMounted(loadData)
 </script>
 
@@ -340,23 +361,15 @@ onMounted(loadData)
 }
 
 .tree-header {
-  margin-bottom: 15px;
-}
-
-.category-menu {
-  border-right: none;
-}
-
-.category-menu .el-menu-item {
-  height: 36px;
-  line-height: 36px;
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
 }
 
-.category-count {
-  color: #909399;
-  font-size: 12px;
+.tree-title {
+  font-weight: 600;
+  color: #303133;
 }
 
 .main-content {

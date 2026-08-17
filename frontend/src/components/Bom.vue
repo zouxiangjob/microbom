@@ -136,7 +136,11 @@
               <el-button type="primary" size="small" :icon="Plus" @click="openAddRel('docs')">添加</el-button>
             </div>
             <el-table :data="docData" row-key="id" border size="small" style="width: 100%">
-              <el-table-column prop="name" label="名称" min-width="160" />
+              <el-table-column prop="name" label="名称" min-width="160">
+                <template #default="{ row }">
+                  <el-link type="primary" :underline="false" @click="navigateToObject('document', row)">{{ row.name }}</el-link>
+                </template>
+              </el-table-column>
               <el-table-column prop="type" label="指派类型" width="140" />
               <el-table-column prop="version" label="修订版本" width="100" />
               <el-table-column label="操作" width="120" fixed="right">
@@ -157,7 +161,11 @@
               <el-button type="primary" size="small" :icon="Plus" @click="openAddRel('drawing')">添加</el-button>
             </div>
             <el-table :data="drawData" row-key="id" border size="small" style="width: 100%">
-              <el-table-column prop="name" label="名称" min-width="160" />
+              <el-table-column prop="name" label="名称" min-width="160">
+                <template #default="{ row }">
+                  <el-link type="primary" :underline="false" @click="navigateToObject('drawing', row)">{{ row.name }}</el-link>
+                </template>
+              </el-table-column>
               <el-table-column prop="relation" label="关联类型" width="110" />
               <el-table-column prop="version" label="版本" width="90" />
               <el-table-column prop="type" label="类型" width="110" />
@@ -188,11 +196,8 @@
       </template>
     </el-dialog>
 
-    <!-- 附件预览模态框（技术文档 / 图档共用） -->
-    <el-dialog v-model="previewVisible" :title="previewName" width="80%" top="5vh" destroy-on-close>
-      <iframe v-if="previewHasFile" :src="previewUrl" style="width:100%; height:70vh; border:none; border-radius:4px;" />
-      <el-empty v-else description="该文件尚未上传物理文件" :image-size="60" />
-    </el-dialog>
+    <!-- 附件预览模态框（技术文档 / 图档共用，按扩展名分派渲染） -->
+    <FilePreviewDialog v-model="previewVisible" :file-name="previewName" :object-id="previewObjectId" />
 
     <!-- 添加关联关系对话框（技术文档 / 图档通用） -->
     <el-dialog v-model="addRelVisible" :title="addRelTitle" width="480px">
@@ -214,10 +219,10 @@ import { ElMessage } from 'element-plus'
 import { Search, Refresh, Setting, Memo, Delete, Plus } from '@element-plus/icons-vue'
 import DetailLayout from './DetailLayout.vue'
 import { getNode, listNodes, NODE_TYPES } from '../api/nodes'
-import { fileUrl, getFileMeta } from '../api/files'
 import { getNodeTree, createRelation, deleteRelation, updateRelation, RELATION_TYPES, RELATION_DATA_TYPES } from '../api/relations'
 import { nodeLabel, nodeTitle, statusTagType, bomRow } from '../api/mapping'
 import { flatToTree } from '../utils/tree'
+import FilePreviewDialog from './FilePreviewDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -409,9 +414,8 @@ const REL_CONFIG = {
 }
 
 const previewVisible = ref(false)
-const previewUrl = ref('')
 const previewName = ref('')
-const previewHasFile = ref(false)
+const previewObjectId = ref('')
 
 const addRelVisible = ref(false)
 const addRelKind = ref('docs')
@@ -422,18 +426,12 @@ const relCandidatesCache = { docs: [], drawing: [] }
 const addRelTitle = computed(() => REL_CONFIG[addRelKind.value]?.title || '')
 const addRelPlaceholder = computed(() => REL_CONFIG[addRelKind.value]?.placeholder || '')
 
-// 预览：弹出模态框，内嵌附件预览页（文档/图档共用）
-const openPreview = async (row) => {
+// 预览：弹出 FilePreviewDialog（内部按扩展名分派渲染，并探测物理文件是否存在）
+const openPreview = (row) => {
   if (!row?.id) return
   previewName.value = row.name || '文件预览'
+  previewObjectId.value = row.id
   previewVisible.value = true
-  try {
-    await getFileMeta(row.id)
-    previewHasFile.value = true
-    previewUrl.value = fileUrl(row.id, true)
-  } catch {
-    previewHasFile.value = false // 无物理文件 → 显示空态而非 iframe 404
-  }
 }
 
 // 添加关联：弹窗选择已有文档/图档，建立「部件 → 文档/图档」关系
@@ -526,6 +524,12 @@ const loadData = async () => {
 const navigateToNode = (row) => {
   if (!row?.id) return
   router.push(`/attribute/${row.id}`)
+}
+
+// 点击文档/图档 → 跳转到对应对象详情页（/object/{objectType}/attribute/{id}）
+const navigateToObject = (objectType, row) => {
+  if (!row?.id) return
+  router.push(`/object/${objectType}/attribute/${row.id}`)
 }
 
 // 插入现有部件：弹窗选择已有部件后建立 BOM 关系
