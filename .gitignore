@@ -5,7 +5,12 @@ node_modules/
 __pycache__/
 *.pyc
 .env
+.claude/
 uploads/
 *.db
 *.db-journal
 *.db-wal
+*.db-shm
+.nicegui/
+dist/
+openapi.json

@@ -1,0 +1,44 @@
+/* ===== 工业软件风格全局主题 ===== */
+
+:root {
+  /* Element Plus 主色覆盖：工业蓝（默认 #409eff → 内敛钢蓝） */
+  --el-color-primary: #2563eb;
+  --el-color-primary-light-3: #6493f0;
+  --el-color-primary-light-5: #92b3f5;
+  --el-color-primary-light-7: #c0d3fa;
+  --el-color-primary-light-8: #d5e2fb;
+  --el-color-primary-light-9: #eaf1fd;
+  --el-color-primary-dark-2: #1e4fb8;
+
+  /* 应用级中性色 */
+  --app-dark: #1f2937;        /* 顶栏 / 侧边菜单深色 */
+  --app-bg: #f1f5f9;          /* 页面背景 */
+  --app-border: #e2e8f0;      /* 边框 */
+  --app-text: #1f2937;        /* 主文字 */
+  --app-text-secondary: #64748b;
+
+  /* 工程软件常用字体 */
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+}
+
+html,
+body,
+#app {
+  color: var(--app-text);
+}
+
+/* 紧凑、密集的数据表格（工程软件数据密度） */
+.el-table {
+  --el-table-header-bg-color: #f8fafc;
+  --el-table-header-text-color: #475569;
+  --el-table-border-color: var(--app-border);
+  font-size: 13px;
+}
+
+.el-table th.el-table__cell {
+  font-weight: 600;
+}
+
+.el-tabs__item {
+  font-weight: 500;
+}

@@ -2,119 +2,86 @@
   <div class="common-layout">
     <el-container class="layout-container">
       <el-header class="header">
-        <div class="logo">TCL</div>
-        <div class="search-wrapper">
-          <el-input v-model="topSearch" placeholder="搜索..." class="top-search" />
-        </div>
-        <div class="header-icons">
-          <el-icon><Bell /></el-icon>
-          <el-icon><User /></el-icon>
-        </div>
+        <div class="logo">BOM 管理系统</div>
       </el-header>
 
-      <el-container>
+      <el-container class="body-container">
         <el-aside width="150px" class="main-aside">
-          <el-menu default-active="5" class="side-menu" background-color="#001529" text-color="#fff">
+          <el-menu :default-active="activeMenu" class="side-menu" background-color="#1f2937" text-color="#fff" @select="handleMenuSelect">
             <el-menu-item index="1"><el-icon><HomeFilled /></el-icon><span>首页</span></el-menu-item>
             <el-sub-menu index="2">
-              <template #title><el-icon><Management /></el-icon><span>BOM管理</span></template>
-            </el-sub-menu>
-            <el-sub-menu index="3">
-              <template #title><el-icon><OfficeBuilding /></el-icon><span>工厂管理</span></template>
-            </el-sub-menu>
-            <el-sub-menu index="4">
-              <template #title><el-icon><Operation /></el-icon><span>工艺规划</span></template>
-            </el-sub-menu>
-            <el-sub-menu index="5">
-              <template #title><el-icon><Files /></el-icon><span>工艺资源模型</span></template>
-              <el-menu-item index="5-1">工序</el-menu-item>
-              <el-menu-item index="5-2">工步</el-menu-item>
+              <template #title><el-icon><Management /></el-icon><span>产品管理</span></template>
+              <el-menu-item index="2-1">零部件</el-menu-item>
+              <el-menu-item index="2-2">技术文档</el-menu-item>
+              <el-menu-item index="2-3">图档</el-menu-item>
             </el-sub-menu>
           </el-menu>
         </el-aside>
 
-        <el-aside width="220px" class="tree-aside">
-          <div class="tree-header">
-            <el-input v-model="filterText" placeholder="查询" :prefix-icon="Search" />
-          </div>
-          <el-tree
-            :data="treeData"
-            :props="defaultProps"
-            default-expand-all
-            highlight-current
-            class="resource-tree"
-          />
+        <el-aside v-if="showTree" width="220px" class="tree-aside">
+          <div class="tree-header">分类</div>
+          <el-menu
+            :default-active="selectedCategory || '__all__'"
+            class="category-menu"
+            @select="onCategorySelect"
+          >
+            <el-menu-item index="__all__">全部分类</el-menu-item>
+            <el-menu-item v-for="c in categoryOptions" :key="c.name" :index="c.name">
+              <span>{{ c.name }}</span>
+              <span class="category-count">{{ c.count }}</span>
+            </el-menu-item>
+          </el-menu>
         </el-aside>
 
         <el-main class="main-content">
+          <template v-if="showList">
           <div class="toolbar">
-            <el-button type="primary" :icon="Plus">创建</el-button>
-            <el-button :icon="CopyDocument">属性比对</el-button>
-            <el-dropdown ml-2>
-              <el-button :icon="Download">导入<el-icon class="el-icon--right"><arrow-down /></el-icon></el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item>Excel导入</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-            <el-button :icon="Upload">导出</el-button>
-            <el-button type="primary" plain>提交至工作流程</el-button>
+            <el-button type="primary" :icon="Plus" @click="handleCreate">创建</el-button>
           </div>
 
           <div class="search-form">
-            <el-form :inline="true" :model="searchForm">
-              <el-form-item label="模糊搜索"><el-input v-model="searchForm.code" /></el-form-item>            
-              <el-form-item>
-                <el-button type="primary">查询</el-button>
-                <el-button>重置</el-button>
-              </el-form-item>
-            </el-form>
+            <el-input v-model="searchForm.code" class="search-input" @keyup.enter="handleSearch">
+              <template #prepend>模糊搜索</template>
+              <template #append>
+                <el-button type="primary" :icon="Search" @click="handleSearch">查询</el-button>
+              </template>
+            </el-input>
           </div>
 
-          <el-table :data="tableData" border style="width: 100%" class="data-table">
+          <el-table v-loading="loading" :data="pagedData" border style="width: 100%" class="data-table">
             <el-table-column type="selection" width="40" />
-            <el-table-column prop="displayName" label="显示名称" min-width="180" sortable>
+            <el-table-column
+              v-for="col in columns"
+              :key="col.prop"
+              :prop="col.prop"
+              :label="col.label"
+              :min-width="col.minWidth"
+              :width="col.width"
+              :sortable="col.sortable"
+            >
               <template #default="scope">
-                <el-link type="primary" @click="navigateToAttribute(scope.row)">
-                  {{ scope.row.displayName }}
+                <el-link v-if="col.kind === 'link'" type="primary" @click="navigateToDetail(scope.row)">
+                  {{ scope.row[col.prop] }}
                 </el-link>
-              </template>
-            </el-table-column>
-            <el-table-column prop="name" label="名称" min-width="120" />
-            <el-table-column prop="status" label="数据状态" width="100">
-              <template #default="scope">
-                <el-tag :type="scope.row.status === '工作中' ? 'success' : 'warning'">{{ scope.row.status }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="version" label="修订版本" width="100" />
-            <el-table-column prop="creator" label="创建者" width="120" />
-            <el-table-column label="操作" fixed="right" width="180">
-              <template #default>
-                <el-button link type="primary">编辑</el-button>
-                <el-button link type="primary">提交</el-button>
-                <el-button link type="primary">分类</el-button>
-                <el-dropdown trigger="click">
-                  <span class="el-dropdown-link">...</span>
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item>另存</el-dropdown-item>
-                      <el-dropdown-item>删除</el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
+                <el-tag v-else-if="col.kind === 'tag'" :type="scope.row.status === '已发布' ? 'success' : 'warning'">
+                  {{ scope.row[col.prop] }}
+                </el-tag>
+                <span v-else>{{ scope.row[col.prop] }}</span>
               </template>
             </el-table-column>
           </el-table>
 
           <div class="pagination-container">
             <el-pagination
+              v-model:current-page="currentPage"
+              v-model:page-size="pageSize"
               layout="total, prev, pager, next, sizes"
-              :total="271"
-              :page-size="10"
+              :total="tableData.length"
+              :page-sizes="[10, 20, 50, 100]"
               class="mt-4"
             />
           </div>
+          </template>
         </el-main>
       </el-container>
     </el-container>
@@ -122,72 +89,205 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { 
-  Search, Plus, CopyDocument, Download, Upload, 
-  Bell, User, HomeFilled, Management, OfficeBuilding, Operation, Files 
+import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  Search, Plus,
+  HomeFilled, Management
 } from '@element-plus/icons-vue'
+import { listNodes, createNode, NODE_TYPES } from '../api/nodes'
+import { nodeToRow, documentToRow, drawingToRow } from '../api/mapping'
 
 const router = useRouter()
-const topSearch = ref('')
-const filterText = ref('')
 
 const searchForm = reactive({
   code: '',
-  name: '',
-  type: ''
 })
 
-// 树形数据
-const treeData = [
-  {
-    label: '辅助材料',
-    children: []
-  },
-  {
-    label: '基础材料',
-    children: []
-  },
-  {
-    label: '工艺资源库',
-    children: [
-      {
-        label: '技能',
-        children: [{ label: '人员技能' }]
-      },
-      {
-        label: '工艺装备'
-      },
-      {
-        label: '设备',
-        children: [
-          { label: '五轴铣床/加工中心' },
-          { label: '车床', children: [{ label: '车床6063' }] }
-        ]
-      }
-    ]
+const activeMenu = ref('1')
+
+// 右侧列表：四种菜单都显示
+const showList = computed(() => ['1', '2-1', '2-2', '2-3'].includes(activeMenu.value))
+// 左侧分类树：仅零部件（材料分类对文档/图档无意义）
+const showTree = computed(() => activeMenu.value === '1' || activeMenu.value === '2-1')
+
+// 菜单 → 对象类型（复用 nodes.js 的 NODE_TYPES）
+const MENU_TYPE = {
+  '1': NODE_TYPES.PART,
+  '2-1': NODE_TYPES.PART,
+  '2-2': NODE_TYPES.DOCUMENT,
+  '2-3': NODE_TYPES.DRAWING
+}
+const activeType = computed(() => MENU_TYPE[activeMenu.value] || NODE_TYPES.PART)
+const ROW_MAPPERS = {
+  [NODE_TYPES.PART]: nodeToRow,
+  [NODE_TYPES.DOCUMENT]: documentToRow,
+  [NODE_TYPES.DRAWING]: drawingToRow
+}
+
+// 各类型表格列配置（kind: link 链接跳转 / tag 状态着色 / 其余纯文本）
+const COLUMN_CONFIGS = {
+  [NODE_TYPES.PART]: [
+    { prop: 'displayName', label: '显示名称', minWidth: 180, kind: 'link', sortable: true },
+    { prop: 'name', label: '名称', minWidth: 120 },
+    { prop: 'status', label: '数据状态', width: 100, kind: 'tag' },
+    { prop: 'version', label: '修订版本', width: 100 },
+    { prop: 'creator', label: '创建者', width: 120 }
+  ],
+  [NODE_TYPES.DOCUMENT]: [
+    { prop: 'name', label: '名称', minWidth: 180, kind: 'link' },
+    { prop: 'tag', label: '标签', minWidth: 120 },
+    { prop: 'version', label: '修订版本', width: 120 }
+  ],
+  [NODE_TYPES.DRAWING]: [
+    { prop: 'name', label: '名称', minWidth: 160, kind: 'link' },
+    { prop: 'type', label: '类型', width: 120 },
+    { prop: 'version', label: '版本', width: 100 },
+    { prop: 'format', label: '格式', width: 100 }
+  ]
+}
+const columns = computed(() => COLUMN_CONFIGS[activeType.value] || COLUMN_CONFIGS[NODE_TYPES.PART])
+
+// 分类侧栏：从已加载的零部件行里按 category 属性聚合出分类（后端暂无 category 节点表）
+const selectedCategory = ref('')
+const categoryOptions = computed(() => {
+  if (activeType.value !== NODE_TYPES.PART) return []
+  const counts = new Map()
+  for (const r of allRows.value) {
+    const c = (r.category || '').trim()
+    if (c) counts.set(c, (counts.get(c) || 0) + 1)
   }
-]
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+})
 
-const defaultProps = {
-  children: 'children',
-  label: 'label',
+const onCategorySelect = (index) => {
+  selectedCategory.value = index === '__all__' ? '' : index
+  applyFilter()
 }
 
-// 表格数据
-const tableData = ref([
-  { displayName: 'ME000000335/A.1;CNC机', name: 'CNC机', status: '工作中', version: 'A.1', creator: 'lixuan1001' },
-  { displayName: 'ME000000334/A.1;二氧化碳焊机', name: '二氧化碳焊机', status: '工作中', version: 'A.1', creator: 'lixuan1001' },
-  { displayName: 'ME000000333/A.2;工资资源', name: '工资资源', status: '审批中', version: 'A.2', creator: 'lixuan1001' },
-  { displayName: 'ME000002981/A.2;530工艺资源测试', name: '530工艺资源测试2', status: '工作中', version: 'A.2', creator: 'UserTest123' },
-  { displayName: 'ME000000332/B.1;测试新建-编辑', name: '测试新建-编辑', status: '工作中', version: 'B.1', creator: 'zhanglifan' },
-])
+// 表格数据：allRows 缓存后端全量，tableData 为过滤后，pagedData 为分页后
+const allRows = ref([])
+const tableData = ref([])
+const loading = ref(false)
+const currentPage = ref(1)
+const pageSize = ref(10)
 
-// 导航到属性页面
-const navigateToAttribute = (row) => {
-  router.push('/attribute')
+const pagedData = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return tableData.value.slice(start, start + pageSize.value)
+})
+
+const applyFilter = () => {
+  const kw = (searchForm.code || '').trim().toLowerCase()
+  const cat = selectedCategory.value
+  tableData.value = allRows.value.filter((r) => {
+    const matchKw = !kw || Object.values(r).some((v) => String(v).toLowerCase().includes(kw))
+    const matchCat = !cat || (r.category || '') === cat
+    return matchKw && matchCat
+  })
+  currentPage.value = 1
 }
+
+const handleSearch = () => {
+  applyFilter()
+}
+
+// 请求竞态守卫：快速切换菜单时，只让最后一次请求的结果落盘
+let loadSeq = 0
+
+const loadData = async () => {
+  const seq = ++loadSeq
+  loading.value = true
+  try {
+    const nodes = await listNodes(activeType.value, { limit: 1000, offset: 0 })
+    if (seq !== loadSeq) return // 已有更新的请求发出，丢弃本次结果
+    allRows.value = (nodes || []).map((n) => ROW_MAPPERS[activeType.value](n))
+    applyFilter()
+  } catch (e) {
+    if (seq !== loadSeq) return
+    ElMessage.error(e.message || '加载列表失败')
+  } finally {
+    if (seq === loadSeq) loading.value = false
+  }
+}
+
+const handleMenuSelect = (index) => {
+  activeMenu.value = index
+  searchForm.code = ''
+  selectedCategory.value = ''
+  currentPage.value = 1
+  loadData()
+}
+
+// 创建新资源：按当前类型调用后端 createNode，成功后刷新列表
+const CREATE_PROPS = {
+  [NODE_TYPES.PART]: {
+    label: '零部件',
+    defaults: (name) => ({
+      part_number: `ME-${Date.now()}`,
+      name,
+      version: 'A.1',
+      status: '草稿',
+      designer: '当前用户'
+    })
+  },
+  [NODE_TYPES.DOCUMENT]: {
+    label: '文档',
+    defaults: (name) => ({ name, doc_version: 'A.0', tag: '技术文档' })
+  },
+  [NODE_TYPES.DRAWING]: {
+    label: '图档',
+    defaults: (name) => ({ name, version: 'A.1', drawing_type: '2D工程图', format: '--' })
+  }
+}
+
+const handleCreate = async () => {
+  const cfg = CREATE_PROPS[activeType.value] || CREATE_PROPS[NODE_TYPES.PART]
+  let name
+  try {
+    const { value } = await ElMessageBox.prompt(`请输入新${cfg.label}名称`, `创建${cfg.label}`, {
+      confirmButtonText: '创建',
+      cancelButtonText: '取消',
+      inputValue: '新建部件'
+    })
+    name = value
+  } catch {
+    return // 用户取消
+  }
+  if (!name || !name.trim()) {
+    ElMessage.warning('名称不能为空')
+    return
+  }
+  try {
+    await createNode(activeType.value, cfg.defaults(name.trim()))
+    ElMessage.success('创建成功')
+    await loadData()
+  } catch (e) {
+    ElMessage.error(e.message || '创建失败')
+  }
+}
+
+// 导航到详情页（row.id 即后端 objects.id），按当前对象类型跳转到对应详情页
+const DETAIL_BASE = {
+  [NODE_TYPES.PART]: '/attribute',
+  [NODE_TYPES.DOCUMENT]: '/object/document/attribute',
+  [NODE_TYPES.DRAWING]: '/object/drawing/attribute'
+}
+
+const navigateToDetail = (row) => {
+  if (!row.id) {
+    ElMessage.warning('该行缺少节点 ID，无法跳转')
+    return
+  }
+  const base = DETAIL_BASE[activeType.value]
+  if (!base) return
+  router.push(`${base}/${row.id}`)
+}
+
+onMounted(loadData)
 </script>
 
 <style scoped>
@@ -203,8 +303,14 @@ const navigateToAttribute = (row) => {
   height: 100%;
 }
 
+/* 中间行容器：约束高度，让右侧主内容区在自身范围内滚动 */
+.body-container {
+  min-height: 0;
+  overflow: hidden;
+}
+
 .header {
-  background-color: #409eff;
+  background-color: #1f2937;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -213,29 +319,14 @@ const navigateToAttribute = (row) => {
 }
 
 .logo {
-  font-size: 24px;
-  font-weight: bold;
-  width: 150px;
-}
-
-.search-wrapper {
-  flex: 1;
-  display: flex;
-  justify-content: center;
-}
-
-.top-search {
-  width: 400px;
-}
-
-.header-icons .el-icon {
-  font-size: 20px;
-  margin-left: 20px;
-  cursor: pointer;
+  font-size: 16px;
+  font-weight: 600;
+  width: 180px;
+  letter-spacing: 0.5px;
 }
 
 .main-aside {
-  background-color: #001529;
+  background-color: #1f2937;
 }
 
 .side-menu {
@@ -252,9 +343,27 @@ const navigateToAttribute = (row) => {
   margin-bottom: 15px;
 }
 
+.category-menu {
+  border-right: none;
+}
+
+.category-menu .el-menu-item {
+  height: 36px;
+  line-height: 36px;
+  display: flex;
+  justify-content: space-between;
+}
+
+.category-count {
+  color: #909399;
+  font-size: 12px;
+}
+
 .main-content {
   background-color: #f0f2f5;
   padding: 15px;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .toolbar {
@@ -267,8 +376,12 @@ const navigateToAttribute = (row) => {
 
 .search-form {
   background: #fff;
-  padding: 15px 15px 0;
+  padding: 15px;
   margin-bottom: 10px;
+}
+
+.search-input {
+  width: 100%;
 }
 
 .data-table {
@@ -282,11 +395,4 @@ const navigateToAttribute = (row) => {
   justify-content: flex-end;
 }
 
-.el-dropdown-link {
-  cursor: pointer;
-  color: var(--el-color-primary);
-  display: inline-flex;
-  align-items: center;
-  margin-left: 8px;
-}
 </style>
