@@ -72,6 +72,11 @@ class RelationModel(Base):
     # "has_2d_drawing", "contains_part" 等
     relation_type: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
 
+    __mapper_args__ = {
+        "polymorphic_on": "relation_type",  # 用该列区分 BOMRelation / PartDocRelation 等关系子类
+        "polymorphic_identity": "base_relation"  # 基类自身标识
+    }
+
     source_id: Mapped[PyUUID] = mapped_column(ForeignKey("objects.id", ondelete="CASCADE"), index=True, nullable=False)
     target_id: Mapped[PyUUID] = mapped_column(ForeignKey("objects.id", ondelete="CASCADE"), index=True, nullable=False)
 

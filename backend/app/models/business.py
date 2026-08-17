@@ -49,6 +49,22 @@ class AttachmentModel(ObjectModel):
     }
 
 
+class CategoryNodeModel(ObjectModel):
+    """分类节点对象 (零部件分类树)"""
+    __mapper_args__ = {
+        "polymorphic_identity": "category",
+    }
+
+    @property
+    def name(self) -> str:
+        """分类名称"""
+        return self.properties.get("name", "")
+
+    @name.setter
+    def name(self, value: str):
+        self.properties["name"] = value
+
+
 # ==============================================================================
 # 2. 业务关系定义 (利用 SQLAlchemy 单表继承机制扩展 RelationModel)
 # ==============================================================================
@@ -94,4 +110,18 @@ class DrawingAttachmentRelation(RelationModel):
     """图档与附件关系：图档 -> 附件"""
     __mapper_args__ = {
         "polymorphic_identity": "drawing_attachment_relation",
+    }
+
+
+class CategoryRelationModel(RelationModel):
+    """分类节点父子关系：分类 -> 分类 (构建分类树)"""
+    __mapper_args__ = {
+        "polymorphic_identity": "category_relation",
+    }
+
+
+class CategoryPartRelationModel(RelationModel):
+    """分类节点与零部件关联关系：分类 -> 零部件 (零部件归类)"""
+    __mapper_args__ = {
+        "polymorphic_identity": "category_part_relation",
     }

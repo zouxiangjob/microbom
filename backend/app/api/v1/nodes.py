@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from app.database.session import get_db
 from app.services.graph import AsyncGraphCrudEngine
 # 导入你的多态实体业务模型
-from app.models.business import PartModel, DocumentModel, DrawingModel, AttachmentModel
+from app.models.business import PartModel, DocumentModel, DrawingModel, AttachmentModel, CategoryNodeModel
 
 router = APIRouter()
 
@@ -16,7 +16,8 @@ NODE_TYPE_MAPPER = {
     "part": PartModel,
     "document": DocumentModel,
     "drawing": DrawingModel,
-    "attachment": AttachmentModel
+    "attachment": AttachmentModel,
+    "category": CategoryNodeModel
 }
 
 

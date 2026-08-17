@@ -16,7 +16,7 @@ from app.services.graph import AsyncGraphCrudEngine
 from app.models.base import ObjectModel
 # 导入你的多态关系业务模型
 from app.models.business import BOMRelation, PartDocRelation, PartDrawingRelation, PartModel, DocumentModel, \
-    DrawingModel, AttachmentModel
+    DrawingModel, AttachmentModel, CategoryNodeModel, CategoryRelationModel, CategoryPartRelationModel
 
 router = APIRouter()
 
@@ -27,7 +27,9 @@ RELATION_TYPE_MAPPER = {
     "cad_ref": PartDrawingRelation,
     "part_drawing_relation": PartDrawingRelation,
     "doc_ref": PartDocRelation,
-    "part_doc_relation": PartDocRelation
+    "part_doc_relation": PartDocRelation,
+    "category_relation": CategoryRelationModel,
+    "category_part_relation": CategoryPartRelationModel
 }
 
 class TreeNodeSchema(BaseModel):
@@ -164,7 +166,8 @@ NODE_MAPPER = {
     "part": PartModel,
     "document": DocumentModel,
     "drawing": DrawingModel,
-    "attachment": AttachmentModel
+    "attachment": AttachmentModel,
+    "category": CategoryNodeModel
 }
 
 # 关系边类型映射字典（兼容你在路由里的 URL 别名）
@@ -174,7 +177,9 @@ EDGE_MAPPER = {
     "cad_ref": PartDrawingRelation,
     "part_drawing_relation": PartDrawingRelation,
     "doc_ref": PartDocRelation,
-    "part_doc_relation": PartDocRelation
+    "part_doc_relation": PartDocRelation,
+    "category_relation": CategoryRelationModel,
+    "category_part_relation": CategoryPartRelationModel
 }
 
 @router.post("/batch-ingest", response_model=BatchCreatedResponse, status_code=status.HTTP_201_CREATED,

@@ -3,6 +3,7 @@ from uuid import UUID as PyUUID
 from typing import Dict, Any
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Path, Form
 from pydantic import BaseModel, ConfigDict, computed_field, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
 from starlette.responses import FileResponse
@@ -11,6 +12,7 @@ from app.config import settings
 from app.database.session import get_db
 # 🚀 导入多态业务模型，让文件管理也能感知“万物皆对象”
 from app.models.business import AttachmentModel, DrawingModel, DocumentModel
+from app.models import FileModel
 from app.services.file_service import save_physical_file, get_file_for_download
 
 router = APIRouter()
@@ -112,3 +114,16 @@ async def download_file(
 
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get("/{object_id}", response_model=FileOut, summary="通过对象 UUID 查询文件元数据")
+async def get_file_meta(
+        object_id: PyUUID,
+        db: AsyncSession = Depends(get_db)
+):
+    """查询某个对象是否已关联物理文件，返回文件名/大小/MIME 等元数据；无记录则 404。"""
+    result = await db.execute(select(FileModel).where(FileModel.object_id == object_id))
+    db_file = result.scalar_one_or_none()
+    if not db_file:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="该文件在系统中无任何记账记录")
+    return db_file
