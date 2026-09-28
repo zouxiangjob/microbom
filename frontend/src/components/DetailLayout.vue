@@ -50,29 +50,32 @@ const goBack = () => router.push('/')
 
 <style scoped>
 .detail-container {
-  padding: 20px;
-  background-color: #fff;
+  padding: 20px 24px;
+  background-color: var(--paper);
   min-height: 100vh;
 }
 
+/* 详情页 = 图纸 title block：DIN 标题 + 发丝下划线 */
 .header-section {
   display: flex;
   align-items: center;
   gap: 12px;
   padding-bottom: 12px;
-  border-bottom: 1px solid var(--app-border);
+  border-bottom: 1px solid var(--line);
   margin-bottom: 16px;
 }
 
 .back-btn {
-  color: var(--app-text-secondary);
+  color: var(--ink-500);
 }
 
 .page-title {
-  font-size: 18px;
-  color: var(--app-text);
-  margin: 0;
+  font-family: var(--font-display);
+  font-size: 20px;
   font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-900);
+  margin: 0;
 }
 
 .custom-tabs :deep(.el-tabs__item) {

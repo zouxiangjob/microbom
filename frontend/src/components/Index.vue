@@ -2,12 +2,13 @@
   <div class="common-layout">
     <el-container class="layout-container">
       <el-header class="header">
-        <div class="logo">BOM 管理系统</div>
+        <div class="logo">MicroBOM<span class="logo-accent"></span></div>
+        <div class="sheet-tag">SHEET <span class="sheet-no">01</span> · {{ activeMenuLabel }}</div>
       </el-header>
 
       <el-container class="body-container">
         <el-aside width="150px" class="main-aside">
-          <el-menu :default-active="activeMenu" class="side-menu" background-color="#1f2937" text-color="#fff" @select="handleMenuSelect">
+          <el-menu :default-active="activeMenu" class="side-menu" @select="handleMenuSelect">
             <el-menu-item index="1"><el-icon><HomeFilled /></el-icon><span>首页</span></el-menu-item>
             <el-sub-menu index="2">
               <template #title><el-icon><Management /></el-icon><span>产品管理</span></template>
@@ -21,18 +22,17 @@
         <el-aside v-if="showTree" width="260px" class="tree-aside">
           <div class="tree-header">
             <span class="tree-title">分类</span>
-            <el-button size="small" @click="clearCategory">全部零部件</el-button>
           </div>
           <CategoryTree @select="onCategorySelect" @change="onCategoryChange" />
         </el-aside>
 
-        <el-main class="main-content">
+        <el-main class="main-content blueprint-grid">
           <template v-if="showList">
-          <div class="toolbar">
+          <div class="toolbar panel">
             <el-button type="primary" :icon="Plus" @click="handleCreate">创建</el-button>
           </div>
 
-          <div class="search-form">
+          <div class="search-form panel">
             <el-input v-model="searchForm.code" class="search-input" @keyup.enter="handleSearch">
               <template #prepend>模糊搜索</template>
               <template #append>
@@ -51,12 +51,13 @@
               :min-width="col.minWidth"
               :width="col.width"
               :sortable="col.sortable"
+              :class-name="col.className"
             >
               <template #default="scope">
                 <el-link v-if="col.kind === 'link'" type="primary" @click="navigateToDetail(scope.row)">
                   {{ scope.row[col.prop] }}
                 </el-link>
-                <el-tag v-else-if="col.kind === 'tag'" :type="scope.row.status === '已发布' ? 'success' : 'warning'">
+                <el-tag v-else-if="col.kind === 'tag'" :type="statusTagType(scope.row.status)">
                   {{ scope.row[col.prop] }}
                 </el-tag>
                 <span v-else>{{ scope.row[col.prop] }}</span>
@@ -64,7 +65,7 @@
             </el-table-column>
           </el-table>
 
-          <div class="pagination-container">
+          <div class="pagination-container panel">
             <el-pagination
               v-model:current-page="currentPage"
               v-model:page-size="pageSize"
@@ -91,7 +92,7 @@ import {
 } from '@element-plus/icons-vue'
 import { listNodes, createNode, NODE_TYPES } from '../api/nodes'
 import { listRelations, RELATION_TYPES } from '../api/relations'
-import { nodeToRow, documentToRow, drawingToRow } from '../api/mapping'
+import { nodeToRow, documentToRow, drawingToRow, statusTagType } from '../api/mapping'
 import CategoryTree from './CategoryTree.vue'
 
 const router = useRouter()
@@ -114,6 +115,15 @@ const MENU_TYPE = {
   '2-2': NODE_TYPES.DOCUMENT,
   '2-3': NODE_TYPES.DRAWING
 }
+
+// 顶栏 title-block 显示的当前模块（蓝图图纸号标签，功能性而非装饰）
+const MENU_LABEL = {
+  '1': '首页 · 零部件',
+  '2-1': '零部件',
+  '2-2': '技术文档',
+  '2-3': '图档'
+}
+const activeMenuLabel = computed(() => MENU_LABEL[activeMenu.value] || '首页')
 const activeType = computed(() => MENU_TYPE[activeMenu.value] || NODE_TYPES.PART)
 const ROW_MAPPERS = {
   [NODE_TYPES.PART]: nodeToRow,
@@ -127,19 +137,19 @@ const COLUMN_CONFIGS = {
     { prop: 'displayName', label: '显示名称', minWidth: 180, kind: 'link', sortable: true },
     { prop: 'name', label: '名称', minWidth: 120 },
     { prop: 'status', label: '数据状态', width: 100, kind: 'tag' },
-    { prop: 'version', label: '修订版本', width: 100 },
+    { prop: 'version', label: '修订版本', width: 100, className: 'font-data' },
     { prop: 'creator', label: '创建者', width: 120 }
   ],
   [NODE_TYPES.DOCUMENT]: [
     { prop: 'name', label: '名称', minWidth: 180, kind: 'link' },
     { prop: 'tag', label: '标签', minWidth: 120 },
-    { prop: 'version', label: '修订版本', width: 120 }
+    { prop: 'version', label: '修订版本', width: 120, className: 'font-data' }
   ],
   [NODE_TYPES.DRAWING]: [
     { prop: 'name', label: '名称', minWidth: 160, kind: 'link' },
     { prop: 'type', label: '类型', width: 120 },
-    { prop: 'version', label: '版本', width: 100 },
-    { prop: 'format', label: '格式', width: 100 }
+    { prop: 'version', label: '版本', width: 100, className: 'font-data' },
+    { prop: 'format', label: '格式', width: 100, className: 'font-data' }
   ]
 }
 const columns = computed(() => COLUMN_CONFIGS[activeType.value] || COLUMN_CONFIGS[NODE_TYPES.PART])
@@ -301,11 +311,15 @@ const loadCategoryParts = async (categoryId) => {
   }
 }
 
-const onCategoryChange = (node) => {
-  // 分类增删改或零部件关联变化后，若正好是当前选中的分类，则刷新右侧列表
-  if (selectedCategoryId.value === node?.id) {
-    loadCategoryParts(selectedCategoryId.value)
+const onCategoryChange = ({ node, action } = {}) => {
+  if (!node || node.id !== selectedCategoryId.value) return
+  if (action === 'remove') {
+    // 当前选中分类被删除：回到「全部零部件」，避免右侧显示已删分类的陈旧数据
+    clearCategory()
+    return
   }
+  // 重命名 / 添加/移除零部件等：刷新该分类的关联零部件
+  loadCategoryParts(selectedCategoryId.value)
 }
 
 onMounted(loadData)
@@ -330,34 +344,72 @@ onMounted(loadData)
   overflow: hidden;
 }
 
+/* ── 顶栏 = 图纸 title block：DIN 标题 + 等宽图纸号 ── */
 .header {
-  background-color: #1f2937;
+  background-color: var(--ink-900);
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
-  color: white;
+  color: #fff;
   padding: 0 20px;
+  border-bottom: 2px solid var(--blue);
 }
 
 .logo {
-  font-size: 16px;
+  font-family: var(--font-display);
+  font-size: 18px;
   font-weight: 600;
-  width: 180px;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.04em;
+  color: #fff;
 }
 
+.logo-accent {
+  color: var(--cyan);
+}
+
+.sheet-tag {
+  font-family: var(--font-data);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--ink-300);
+}
+
+.sheet-no {
+  color: var(--cyan);
+}
+
+/* ── 侧边导航：深墨底，激活项普鲁士蓝 ── */
 .main-aside {
-  background-color: #1f2937;
+  background-color: var(--ink-900);
 }
 
 .side-menu {
   border-right: none;
+  --el-menu-bg-color: var(--ink-900);
+  --el-menu-text-color: #B7C4D4;
+  --el-menu-active-color: #fff;
+  --el-menu-hover-bg-color: rgba(255, 255, 255, 0.06);
+  --el-menu-item-height: 44px;
 }
 
+.side-menu :deep(.el-menu-item.is-active) {
+  background-color: var(--blue);
+  color: #fff;
+}
+
+.side-menu :deep(.el-sub-menu__title) {
+  color: #B7C4D4;
+}
+
+.side-menu :deep(.el-sub-menu__title:hover) {
+  color: #fff;
+}
+
+/* ── 分类树侧栏：图纸面板 ── */
 .tree-aside {
-  border-right: 1px solid #dcdfe6;
+  border-right: 1px solid var(--line);
   padding: 10px;
-  background-color: #fff;
+  background-color: var(--surface);
 }
 
 .tree-header {
@@ -368,19 +420,19 @@ onMounted(loadData)
 }
 
 .tree-title {
+  font-family: var(--font-display);
   font-weight: 600;
-  color: #303133;
+  color: var(--ink-900);
 }
 
+/* ── 主内容区：图纸网格背景由 .blueprint-grid 提供 ── */
 .main-content {
-  background-color: #f0f2f5;
   padding: 15px;
   overflow-y: auto;
   min-height: 0;
 }
 
 .toolbar {
-  background: #fff;
   padding: 10px 15px;
   margin-bottom: 10px;
   display: flex;
@@ -388,7 +440,6 @@ onMounted(loadData)
 }
 
 .search-form {
-  background: #fff;
   padding: 15px;
   margin-bottom: 10px;
 }
@@ -402,7 +453,6 @@ onMounted(loadData)
 }
 
 .pagination-container {
-  background: #fff;
   padding: 10px;
   display: flex;
   justify-content: flex-end;

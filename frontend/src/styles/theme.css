@@ -1,44 +1,174 @@
-/* ===== 工业软件风格全局主题 ===== */
+/* ============================================================
+   工程图 · 蓝图（Blueprint）主题
+   视觉方向 1：工程图蓝图纸感
+   - 冷蓝灰纸面 + 普鲁士蓝墨线 + 图纸发丝边框/网格
+   - Bahnschrift(DIN) 标题 · Segoe UI 正文 · 等宽字体 技术数据列
+   本文件是全站设计 token 的单一真源，组件不再硬编码颜色。
+   ============================================================ */
 
 :root {
-  /* Element Plus 主色覆盖：工业蓝（默认 #409eff → 内敛钢蓝） */
-  --el-color-primary: #2563eb;
-  --el-color-primary-light-3: #6493f0;
-  --el-color-primary-light-5: #92b3f5;
-  --el-color-primary-light-7: #c0d3fa;
-  --el-color-primary-light-8: #d5e2fb;
-  --el-color-primary-light-9: #eaf1fd;
-  --el-color-primary-dark-2: #1e4fb8;
+  /* ── 墨色（蓝调中性，非纯黑）── */
+  --ink-900: #16283F;   /* 最深：标题/强文字/顶栏 */
+  --ink-700: #2E3F58;   /* 主文字 */
+  --ink-500: #5C6B82;   /* 次文字 */
+  --ink-300: #93A3B8;   /* 占位/禁用 */
 
-  /* 应用级中性色 */
-  --app-dark: #1f2937;        /* 顶栏 / 侧边菜单深色 */
-  --app-bg: #f1f5f9;          /* 页面背景 */
-  --app-border: #e2e8f0;      /* 边框 */
-  --app-text: #1f2937;        /* 主文字 */
-  --app-text-secondary: #64748b;
+  /* ── 纸面（冷蓝灰，非暖奶油）── */
+  --paper: #F2F5F9;     /* 页面背景 */
+  --surface: #FBFCFE;   /* 面板/表格表面 */
+  --line: #D8E0EA;      /* 发丝线 */
+  --line-strong: #B9C6D6;
 
-  /* 工程软件常用字体 */
-  font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  /* ── 蓝图强调（普鲁士蓝 + 蓝图青副强调）── */
+  --blue: #1E5FA8;
+  --blue-strong: #17487F;
+  --blue-soft: #E7F0F9;
+  --cyan: #4E9BE0;
+
+  /* ── 数据状态（对齐 mapping.js 四态：草稿/待审核/已发布/已归档）── */
+  --status-draft: #8A97A8;
+  --status-review: #D98E2B;
+  --status-released: #2E8B6B;
+  --status-archived: #6B7A8F;
+
+  /* ── Element Plus 主色映射：普鲁士蓝（替换默认 #409eff）── */
+  --el-color-primary: #1E5FA8;
+  --el-color-primary-light-3: #4E86C2;
+  --el-color-primary-light-5: #7FA9D2;
+  --el-color-primary-light-7: #B0CCE4;
+  --el-color-primary-light-8: #C8DCEF;
+  --el-color-primary-light-9: #E7F0F9;
+  --el-color-primary-dark-2: #17487F;
+
+  /* 成功（冷调绿）*/
+  --el-color-success: #2E8B6B;
+  --el-color-success-light-3: #58A58A;
+  --el-color-success-light-5: #82C0A9;
+  --el-color-success-light-7: #ADDAC8;
+  --el-color-success-light-8: #C2E4D6;
+  --el-color-success-light-9: #E7F3EE;
+  --el-color-success-dark-2: #256F56;
+
+  /* 警告（琥珀，略降饱和以融入冷调）*/
+  --el-color-warning: #D98E2B;
+  --el-color-warning-light-3: #E2A85A;
+  --el-color-warning-light-5: #EBC088;
+  --el-color-warning-light-7: #F3D9B5;
+  --el-color-warning-light-8: #F7E3C7;
+  --el-color-warning-light-9: #FBF1E3;
+  --el-color-warning-dark-2: #AD7222;
+
+  /* 信息/草稿（灰蓝）*/
+  --el-color-info: #8A97A8;
+  --el-color-info-light-3: #A5AFBC;
+  --el-color-info-light-5: #BFC6D0;
+  --el-color-info-light-7: #D9DEE4;
+  --el-color-info-light-8: #E4E8EC;
+  --el-color-info-light-9: #F1F3F6;
+  --el-color-info-dark-2: #6E7986;
+
+  /* 危险（冷调红）*/
+  --el-color-danger: #C05555;
+  --el-color-danger-light-3: #CF7C7C;
+  --el-color-danger-light-5: #DDA0A0;
+  --el-color-danger-light-7: #EEC7C7;
+  --el-color-danger-light-8: #F3D6D6;
+  --el-color-danger-light-9: #FAEDED;
+  --el-color-danger-dark-2: #9A4444;
+
+  /* ── 字体三轨 ── */
+  --font-display: "Bahnschrift", "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-body: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  --font-data: "Cascadia Mono", "Consolas", "JetBrains Mono", ui-monospace, monospace;
+
+  /* ── 几何：直角（图纸边框是方的）── */
+  --el-border-radius-base: 2px;
+  --el-border-radius-small: 2px;
+  --el-border-radius-round: 2px;
+
+  font-family: var(--font-body);
+  color: var(--ink-700);
 }
 
 html,
 body,
 #app {
-  color: var(--app-text);
+  color: var(--ink-700);
 }
 
-/* 紧凑、密集的数据表格（工程软件数据密度） */
+/* ── 图纸网格背景（唯一强调装饰，仅用于首页主内容区）──
+   细线 24px + 主格 120px，普鲁士蓝低透明度 */
+.blueprint-grid {
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(to right, rgba(30, 95, 168, 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(30, 95, 168, 0.05) 1px, transparent 1px),
+    linear-gradient(to right, rgba(30, 95, 168, 0.10) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(30, 95, 168, 0.10) 1px, transparent 1px);
+  background-size: 24px 24px, 24px 24px, 120px 120px, 120px 120px;
+}
+
+/* ── 图纸面板：直角发丝边框，去阴影 ── */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* 等宽技术数据工具类（编码/版本/数量/单位/格式列）*/
+.font-data {
+  font-family: var(--font-data);
+}
+
+/* ── 表格：蓝灰表头、紧凑、DIN 表头 ── */
 .el-table {
-  --el-table-header-bg-color: #f8fafc;
-  --el-table-header-text-color: #475569;
-  --el-table-border-color: var(--app-border);
+  --el-table-header-bg-color: #EDF2F8;
+  --el-table-header-text-color: var(--ink-700);
+  --el-table-border-color: var(--line);
+  --el-table-row-hover-bg-color: var(--blue-soft);
   font-size: 13px;
+  border-radius: 0;
 }
 
 .el-table th.el-table__cell {
   font-weight: 600;
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
 }
 
+.el-table .cell {
+  color: var(--ink-700);
+}
+
+/* ── 标签：直角、冷调状态色 ── */
+.el-tag {
+  border-radius: 2px;
+  font-weight: 500;
+}
+
+/* ── 按钮：直角，克制 ── */
+.el-button {
+  border-radius: 2px;
+  font-weight: 500;
+}
+
+/* ── 页签：DIN 字体，激活态普鲁士蓝 ── */
 .el-tabs__item {
   font-weight: 500;
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+}
+
+.el-tabs__item.is-active {
+  color: var(--blue);
+}
+
+.el-tabs__active-bar {
+  background-color: var(--blue);
+}
+
+/* ── 分页 ── */
+.el-pagination {
+  --el-pagination-button-bg-color: transparent;
 }
