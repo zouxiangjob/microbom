@@ -2,7 +2,7 @@
   <div class="category-tree">
     <div class="tree-header">
       <el-input v-model="filterText" placeholder="查询" :prefix-icon="Search" clearable />
-      <el-button type="primary" size="small" :icon="Plus" @click="addRoot">新建分类</el-button>
+      <el-button type="primary" size="small" :icon="Plus" @click="addRoot">新建</el-button>
     </div>
 
     <el-tree
@@ -22,9 +22,9 @@
           <span class="node-label">{{ data.label }}</span>
           <!-- 节点旁操作按钮：默认缩略隐藏，hover 时展开 -->
           <span class="node-actions">
-            <el-icon title="新建子分类" @click.stop="addChild(data)"><Plus /></el-icon>
-            <el-icon title="添加零部件" @click.stop="addPart(data)"><CirclePlus /></el-icon>
-            <el-icon title="移除零部件" @click.stop="removePart(data)"><CircleClose /></el-icon>
+            <el-icon title="新建" @click.stop="addChild(data)"><Plus /></el-icon>
+            <el-icon title="添加" @click.stop="addPart(data)"><CirclePlus /></el-icon>
+            <el-icon title="移除" @click.stop="removePart(data)"><CircleClose /></el-icon>
             <el-icon title="重命名" @click.stop="rename(data)"><Edit /></el-icon>
             <el-icon title="删除" @click.stop="remove(data)"><Delete /></el-icon>
           </span>
@@ -159,9 +159,10 @@ const addRoot = async () => {
   const name = await promptName('新建分类', '请输入分类名称')
   if (!name) return
   try {
-    await createNode(props.objectType, { [props.labelKey]: name })
+    const node = await createNode(props.objectType, { [props.labelKey]: name })
     ElMessage.success('创建成功')
     await load()
+    emit('change', { node, action: 'addRoot' })
   } catch (e) {
     ElMessage.error(e.message || '创建失败')
   }
@@ -175,6 +176,7 @@ const addChild = async (data) => {
     await createRelation(props.relationType, data.id, child.id, {})
     ElMessage.success('创建成功')
     await load()
+    emit('change', { node: child, action: 'addChild' })
   } catch (e) {
     ElMessage.error(e.message || '创建失败')
   }
@@ -187,6 +189,7 @@ const rename = async (data) => {
     await updateNode(props.objectType, data.id, { [props.labelKey]: name })
     ElMessage.success('已更新')
     await load()
+    emit('change', { node: { ...data, label: name }, action: 'rename' })
   } catch (e) {
     ElMessage.error(e.message || '更新失败')
   }
@@ -210,6 +213,7 @@ const remove = async (data) => {
     await deleteNode(props.objectType, data.id)
     ElMessage.success('已删除')
     await load()
+    emit('change', { node: data, action: 'remove' })
   } catch (e) {
     ElMessage.error(e.message || '删除失败')
   }
@@ -251,7 +255,7 @@ const confirmAddPart = async () => {
     await createRelation(props.partRelationType, activePartNode.value.id, selectedPartId.value, {})
     ElMessage.success('已添加零部件')
     addPartVisible.value = false
-    emit('change', activePartNode.value)
+    emit('change', { node: activePartNode.value, action: 'addPart' })
   } catch (e) {
     ElMessage.error(e.message || '添加失败')
   }
@@ -281,7 +285,7 @@ const confirmRemovePart = async () => {
     await deleteRelation(props.partRelationType, target.edgeId)
     ElMessage.success('已移除零部件')
     removePartVisible.value = false
-    emit('change', activePartNode.value)
+    emit('change', { node: activePartNode.value, action: 'removePart' })
   } catch (e) {
     ElMessage.error(e.message || '移除失败')
   }

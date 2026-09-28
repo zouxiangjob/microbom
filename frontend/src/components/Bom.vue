@@ -220,7 +220,7 @@ import { Search, Refresh, Setting, Memo, Delete, Plus } from '@element-plus/icon
 import DetailLayout from './DetailLayout.vue'
 import { getNode, listNodes, NODE_TYPES } from '../api/nodes'
 import { getNodeTree, createRelation, deleteRelation, updateRelation, RELATION_TYPES, RELATION_DATA_TYPES } from '../api/relations'
-import { nodeLabel, nodeTitle, statusTagType, bomRow } from '../api/mapping'
+import { nodeLabel, nodeTitle, statusTagType, bomRow, docRow, drawingRow } from '../api/mapping'
 import { flatToTree } from '../utils/tree'
 import FilePreviewDialog from './FilePreviewDialog.vue'
 
@@ -361,17 +361,13 @@ const refreshSubIfNeeded = () => {
   else if (subTab.value === 'drawing') loadDrawings()
 }
 
-// 技术文档 / 图档直接复用 loadData 已拉取的 treeFlat（一次穿透），避免逐边 N+1 查询
+// 技术文档 / 图档直接复用 loadData 已拉取的 treeFlat（一次穿透），避免逐边 N+1 查询；
+// 行映射统一走 mapping.js 的 docRow / drawingRow，与独立页签 RelatedObjects.vue 保持一致
 const loadDocs = () => {
   const id = currentNodeId.value
   docData.value = treeFlat.value
     .filter((i) => i.edge?.relation_type === RELATION_DATA_TYPES.DOCUMENT && i.edge?.source_id === id)
-    .map((i) => {
-      const d = i.target_node
-      if (!d) return null
-      const p = d.properties || {}
-      return { id: d.id, edgeId: i.edge.id, name: p.name || '--', type: p.tag || '--', version: p.doc_version || '--' }
-    })
+    .map((i) => (i.target_node ? docRow(i.target_node, i.edge) : null))
     .filter(Boolean)
 }
 
@@ -379,21 +375,7 @@ const loadDrawings = () => {
   const id = currentNodeId.value
   drawData.value = treeFlat.value
     .filter((i) => i.edge?.relation_type === RELATION_DATA_TYPES.DRAWING && i.edge?.source_id === id)
-    .map((i) => {
-      const d = i.target_node
-      if (!d) return null
-      const p = d.properties || {}
-      const ep = i.edge?.properties || {}
-      return {
-        id: d.id,
-        edgeId: i.edge.id,
-        name: p.name || '--',
-        relation: ep.is_primary ? '主关联' : '被动关联',
-        version: p.version || '--',
-        type: p.drawing_type || '--',
-        format: p.format || '--'
-      }
-    })
+    .map((i) => (i.target_node ? drawingRow(i.target_node, i.edge) : null))
     .filter(Boolean)
 }
 

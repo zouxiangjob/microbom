@@ -33,10 +33,18 @@
           :label="col.label"
           :min-width="col.minWidth"
           :width="col.width"
-        />
-        <el-table-column label="操作" width="80" fixed="right">
+        >
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="removeRow(row)">移除</el-button>
+            <el-link v-if="col.kind === 'link'" type="primary" :underline="false" @click="navigateToObject(row)">
+              {{ row[col.prop] }}
+            </el-link>
+            <span v-else>{{ row[col.prop] }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="120" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" size="small" @click="openPreview(row)">预览</el-button>
+            <el-button link type="danger" size="small" @click="removeRow(row)">移除</el-button>
           </template>
         </el-table-column>
         <template #empty>
@@ -55,15 +63,19 @@
         <el-button type="primary" :disabled="!selectedId" @click="confirmAdd">确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- 附件预览模态框（与 Bom.vue 内嵌子页签一致） -->
+    <FilePreviewDialog v-model="previewVisible" :file-name="previewName" :object-id="previewObjectId" />
   </DetailLayout>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Delete, Refresh } from '@element-plus/icons-vue'
 import DetailLayout from './DetailLayout.vue'
+import FilePreviewDialog from './FilePreviewDialog.vue'
 import { getNode, listNodes, createNode, NODE_TYPES } from '../api/nodes'
 import { getNodeTree, createRelation, deleteRelation, RELATION_TYPES, RELATION_DATA_TYPES } from '../api/relations'
 import { nodeTitle, nodeLabel, drawingRow, docRow } from '../api/mapping'
@@ -74,6 +86,7 @@ const props = defineProps({
 })
 
 const route = useRoute()
+const router = useRouter()
 const nodeId = route.params.id
 
 const KIND_CONFIG = {
@@ -92,7 +105,7 @@ const KIND_CONFIG = {
     addDialogTitle: '添加已有图档',
     addPlaceholder: '搜索并选择图档',
     columns: [
-      { prop: 'name', label: '名称', minWidth: 160 },
+      { prop: 'name', label: '名称', minWidth: 160, kind: 'link' },
       { prop: 'relation', label: '关联类型', width: 120 },
       { prop: 'version', label: '版本', width: 80 },
       { prop: 'type', label: '类型', width: 120 },
@@ -114,7 +127,7 @@ const KIND_CONFIG = {
     addDialogTitle: '添加已有文档',
     addPlaceholder: '搜索并选择文档',
     columns: [
-      { prop: 'name', label: '名称', minWidth: 180 },
+      { prop: 'name', label: '名称', minWidth: 180, kind: 'link' },
       { prop: 'type', label: '指派类型', width: 150 },
       { prop: 'version', label: '修订版本', width: 120 },
       { prop: 'quantity', label: '数量', width: 100 },
@@ -244,6 +257,23 @@ const removeRow = async (row) => {
   } catch (e) {
     ElMessage.error(e.message || '移除失败')
   }
+}
+
+// ── 预览 + 跳转详情（对齐 Bom.vue 内嵌子页签的能力）──
+const previewVisible = ref(false)
+const previewName = ref('')
+const previewObjectId = ref('')
+
+const openPreview = (row) => {
+  if (!row?.id) return
+  previewName.value = row.name || '文件预览'
+  previewObjectId.value = row.id
+  previewVisible.value = true
+}
+
+const navigateToObject = (row) => {
+  if (!row?.id) return
+  router.push(`/object/${props.kind}/attribute/${row.id}`)
 }
 
 onMounted(loadData)

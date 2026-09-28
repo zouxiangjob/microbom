@@ -6,16 +6,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Vue 3 + Vite frontend for a BOM / PDM management system (product structure, parts, technical documents, CAD drawings). It talks to the backend through a real API layer (`src/api/*`); components fetch live data rather than render hardcoded mock data. The backend is a separate FastAPI + NiceGUI app in `../backend/` (see its own `CLAUDE.md`), served at `http://127.0.0.1:8000`.
 
-## Commands
-
-```bash
-npm run dev      # start Vite dev server on http://localhost:5173
-npm run build    # production build to dist/
-npm run preview  # preview the production build
-```
-
-There is no test suite and no linter configured.
-
 ## Architecture
 
 - **Entry** — `src/main.js` registers vue-router and Element Plus globally (`app.use(ElementPlus)`) and imports the global theme `src/styles/theme.css`.
