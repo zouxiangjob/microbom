@@ -1,25 +1,28 @@
 """
-工程师端页面：BOM 特征树 + 版本时光机 + 发布控制。
+工程师端页面：BOM 特征树 + 版本历史 + 发布控制。
 """
 from typing import Any, List
 
 from nicegui import app, ui
 
-from app.database.session import get_sync_db
+from app.database.session import AsyncSessionLocal
+from app.logging_config import get_logger
 from app.models.business import PartModel
 from app.services.graph import AsyncGraphCrudEngine
 from app.views.base import ecn_notifier, render_header
 from app.views.components import render_bom_tree, render_industrial_table
 from app.views.styles import HEADER_LABEL_CLASSES
 
+logger = get_logger("engineer")
 
-def render_engineer_page() -> None:
+
+async def render_engineer_page() -> None:
     render_header('engineer')
 
     current_role = app.storage.user.get('role', 'admin')
 
     _render_toolbar(current_role)
-    _render_main_content(current_role)
+    await _render_main_content(current_role)
 
 
 def _render_toolbar(current_role: str) -> None:
@@ -31,13 +34,13 @@ def _render_toolbar(current_role: str) -> None:
         )
 
 
-def _render_main_content(current_role: str) -> None:
+async def _render_main_content(current_role: str) -> None:
     with ui.card().classes('w-12/12 p-4 shadow-md bg-white border border-gray-200'):
         ui.label('待审发布版本控制台').classes('text-lg font-black text-blue-950 border-b pb-2 mb-2')
 
         pending_table = render_industrial_table(
             columns=_get_engineer_table_columns(),
-            rows=_get_pending_rows(),
+            rows=await _get_pending_rows(),
             row_key='code',
         )
         _inject_code_slot(pending_table)
@@ -92,10 +95,10 @@ def _inject_action_slot(pending_table: ui.table, current_role: str) -> None:
     ''')
 
 
-def on_click_release_btn(item_code: str) -> None:
+async def on_click_release_btn(item_code: str) -> None:
     """主管点击发布按钮后的后端响应逻辑。"""
-    print(f'====== 主管已授权发布新版本，编码: {item_code} ======')
-    ecn_notifier.publish(_get_ecn_diff_logs(item_code))
+    logger.info("主管已授权发布新版本，编码: %s", item_code)
+    ecn_notifier.publish(await _get_ecn_diff_logs(item_code))
     ui.notify(f'已向全厂下发 {item_code} 的 ECN 变更通知！', type='positive')
 
 
@@ -115,10 +118,10 @@ def _get_engineer_table_columns() -> List[dict]:
     ]
 
 
-def _get_pending_rows() -> List[dict]:
+async def _get_pending_rows() -> List[dict]:
     """从数据库查询所有零部件（PartModel），返回待审表格行数据。"""
-    with get_sync_db() as session:
-        parts = AsyncGraphCrudEngine.query_nodes_by_type_sync(session, PartModel, limit=500)
+    async with AsyncSessionLocal() as session:
+        parts = await AsyncGraphCrudEngine.query_nodes_by_type(session, PartModel, limit=500)
         rows: List[dict] = []
         for p in parts:
             rows.append({
@@ -130,10 +133,10 @@ def _get_pending_rows() -> List[dict]:
         return rows
 
 
-def _get_ecn_diff_logs(item_code: str) -> List[str]:
+async def _get_ecn_diff_logs(item_code: str) -> List[str]:
     """从数据库加载指定物料的 BOM 结构，生成 ECN 变更差异日志。"""
-    with get_sync_db() as session:
-        parts = AsyncGraphCrudEngine.query_nodes_by_property_sync(
+    async with AsyncSessionLocal() as session:
+        parts = await AsyncGraphCrudEngine.query_nodes_by_property(
             session, PartModel, "part_number", item_code
         )
         if not parts:
@@ -146,7 +149,7 @@ def _get_ecn_diff_logs(item_code: str) -> List[str]:
         designer = props.get('designer', '未知')
 
         # 加载 BOM 树，生成变更描述
-        tree = AsyncGraphCrudEngine.get_node_tree_by_cte_sync(session, part.id, max_depth=10)
+        tree = await AsyncGraphCrudEngine.get_node_tree_by_cte(session, part.id, max_depth=10)
 
         logs = [
             f"变更对象: {item_code} ({part_name})",

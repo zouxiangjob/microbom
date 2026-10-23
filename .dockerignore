@@ -1,0 +1,41 @@
+# 版本控制
+.git
+.gitignore
+
+# Python
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.venv
+**/venv
+
+# Node
+**/node_modules
+frontend/dist
+
+# 测试与开发工具
+**/.pytest_cache
+backend/tests
+backend/requirements-dev.txt
+backend/pytest.ini
+backend/start.bat
+
+# 本地数据与日志（运行期由卷挂载提供）
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/*.db-journal
+**/uploads
+**/logs
+
+# 密钥与 IDE
+**/.env
+**/.idea
+**/.vscode
+**/.claude
+**/.nicegui
+
+# 其他
+temp
+openapi.json
+README.md

@@ -2,10 +2,13 @@
 种子数据脚本：向数据库插入 100 条 PartModel + BOM 关系 + 图纸/文档，用于验证视图层。
 运行方式：在 backend/ 目录下执行 python seed_data.py
 """
+import asyncio
 import random
 import uuid
 
-from app.database.session import SyncSessionLocal
+from sqlalchemy import delete, func, select
+
+from app.database.session import AsyncSessionLocal
 from app.models.base import ObjectModel, RelationModel
 from app.models.business import (
     PartModel,
@@ -30,16 +33,22 @@ PART_CATEGORIES = {
 }
 
 DESIGNERS = ["张工", "李工", "王工", "赵工", "刘工", "陈工", "杨工", "黄工", "周工", "吴工"]
-STATUSES = ["草稿", "待审核", "已发布", "已归档"]
+STATUSES = ["draft", "review", "released", "archived"]
 VERSIONS = ["V1.0", "V1.1", "V2.0", "V2.1", "V3.0", "V3.2", "V4.0"]
 
 
-def seed():
-    with SyncSessionLocal() as session:
+async def _count(session, model_cls) -> int:
+    """统计指定多态模型在 objects/relations 表中的行数。"""
+    result = await session.execute(select(func.count()).select_from(model_cls))
+    return result.scalar() or 0
+
+
+async def seed():
+    async with AsyncSessionLocal() as session:
         print("清空旧数据...")
-        session.query(RelationModel).delete()
-        session.query(ObjectModel).delete()
-        session.commit()
+        await session.execute(delete(RelationModel))
+        await session.execute(delete(ObjectModel))
+        await session.commit()
 
         # ===== 第 1 步：创建 100 个零部件 =====
         print("生成 100 条零部件...")
@@ -68,7 +77,7 @@ def seed():
                 session.add(part)
                 counter += 1
 
-        session.flush()
+        await session.flush()
         print(f"  零部件已 flush，共 {len(parts)} 条")
 
         # ===== 第 2 步：创建图档对象 =====
@@ -93,7 +102,7 @@ def seed():
                 session.add(drawing)
                 drawing_map.setdefault(part.id, []).append(drawing)
 
-        session.flush()
+        await session.flush()
         print(f"  图档已 flush，共 {len(drawings)} 条")
 
         # ===== 第 3 步：创建文档对象 =====
@@ -117,7 +126,7 @@ def seed():
             session.add(doc)
             doc_map.setdefault(part.id, []).append(doc)
 
-        session.flush()
+        await session.flush()
         print(f"  文档已 flush，共 {len(documents)} 条")
 
         # ===== 第 4 步：创建 BOM 关系 =====
@@ -141,7 +150,7 @@ def seed():
                 session.add(rel)
                 bom_count += 1
 
-        session.flush()
+        await session.flush()
         print(f"  BOM 关系已 flush，共 {bom_count} 条")
 
         # ===== 第 5 步：创建图纸关系 =====
@@ -158,7 +167,7 @@ def seed():
                 session.add(rel)
                 drawing_rel_count += 1
 
-        session.flush()
+        await session.flush()
         print(f"  图纸关系已 flush，共 {drawing_rel_count} 条")
 
         # ===== 第 6 步：创建文档关系 =====
@@ -175,20 +184,20 @@ def seed():
                 session.add(rel)
                 doc_rel_count += 1
 
-        session.flush()
+        await session.flush()
         print(f"  文档关系已 flush，共 {doc_rel_count} 条")
 
         # ===== 提交 =====
-        session.commit()
+        await session.commit()
 
         print("\n种子数据插入完成！统计：")
-        print(f"   零部件 (PartModel):        {session.query(PartModel).count()}")
-        print(f"   图档 (DrawingModel):       {session.query(DrawingModel).count()}")
-        print(f"   文档 (DocumentModel):      {session.query(DocumentModel).count()}")
-        print(f"   BOM 关系 (BOMRelation):    {session.query(BOMRelation).count()}")
-        print(f"   图纸关系 (PartDrawing):    {session.query(PartDrawingRelation).count()}")
-        print(f"   文档关系 (PartDoc):        {session.query(PartDocRelation).count()}")
+        print(f"   零部件 (PartModel):        {await _count(session, PartModel)}")
+        print(f"   图档 (DrawingModel):       {await _count(session, DrawingModel)}")
+        print(f"   文档 (DocumentModel):      {await _count(session, DocumentModel)}")
+        print(f"   BOM 关系 (BOMRelation):    {await _count(session, BOMRelation)}")
+        print(f"   图纸关系 (PartDrawing):    {await _count(session, PartDrawingRelation)}")
+        print(f"   文档关系 (PartDoc):        {await _count(session, PartDocRelation)}")
 
 
 if __name__ == "__main__":
-    seed()
+    asyncio.run(seed())

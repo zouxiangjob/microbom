@@ -139,7 +139,7 @@ onMounted(loadNode)
 .section-title {
   font-size: 14px;
   font-weight: bold;
-  color: #303133;
+  color: var(--ink-900);
   margin: 0 0 15px 0;
 }
 
@@ -148,7 +148,7 @@ onMounted(loadNode)
 }
 
 .file-hint {
-  color: #909399;
+  color: var(--ink-500);
 }
 
 .file-actions {

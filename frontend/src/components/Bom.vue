@@ -79,7 +79,7 @@
 
           <!-- BOM 子件表 -->
           <div v-show="subTab === 'bom'">
-            <div class="table-toolbar">
+            <div class="table-toolbar panel">
               <div class="right-actions">
                 <el-dropdown split-button type="primary" @click="openAddDialog" @command="openAddDialog">
                   插入
@@ -105,15 +105,15 @@
             >
               <el-table-column type="selection" width="40" />
               <el-table-column type="index" label=" " width="50" />
-              <el-table-column prop="code" label="编码" min-width="120">
+              <el-table-column prop="code" label="编码" min-width="120" class-name="font-data">
                 <template #default="{ row }">
                   <el-link type="primary" :underline="false" @click="navigateToNode(row)">{{ row.code }}</el-link>
                 </template>
               </el-table-column>
               <el-table-column prop="name" label="名称" />
               <el-table-column prop="spec" label="规格" min-width="180" />
-              <el-table-column prop="version" label="版本" width="80" />
-              <el-table-column prop="quantity" label="数量" width="130">
+              <el-table-column prop="version" label="版本" width="80" class-name="font-data" />
+              <el-table-column prop="quantity" label="数量" width="130" class-name="font-data">
                 <template #default="{ row }">
                   <el-input-number
                     v-model="row.quantity"
@@ -126,13 +126,13 @@
                   />
                 </template>
               </el-table-column>
-              <el-table-column prop="unit" label="单位" width="60" />
+              <el-table-column prop="unit" label="单位" width="60" class-name="font-data" />
             </el-table>
           </div>
 
           <!-- 技术文档 -->
           <div v-show="subTab === 'docs'" class="sub-panel">
-            <div class="table-toolbar">
+            <div class="table-toolbar panel">
               <el-button type="primary" size="small" :icon="Plus" @click="openAddRel('docs')">添加</el-button>
             </div>
             <el-table :data="docData" row-key="id" border size="small" style="width: 100%">
@@ -142,7 +142,7 @@
                 </template>
               </el-table-column>
               <el-table-column prop="type" label="指派类型" width="140" />
-              <el-table-column prop="version" label="修订版本" width="100" />
+              <el-table-column prop="version" label="修订版本" width="100" class-name="font-data" />
               <el-table-column label="操作" width="120" fixed="right">
                 <template #default="{ row }">
                   <el-button link type="primary" size="small" @click="openPreview(row)">预览</el-button>
@@ -157,7 +157,7 @@
 
           <!-- 图档 -->
           <div v-show="subTab === 'drawing'" class="sub-panel">
-            <div class="table-toolbar">
+            <div class="table-toolbar panel">
               <el-button type="primary" size="small" :icon="Plus" @click="openAddRel('drawing')">添加</el-button>
             </div>
             <el-table :data="drawData" row-key="id" border size="small" style="width: 100%">
@@ -167,9 +167,9 @@
                 </template>
               </el-table-column>
               <el-table-column prop="relation" label="关联类型" width="110" />
-              <el-table-column prop="version" label="版本" width="90" />
+              <el-table-column prop="version" label="版本" width="90" class-name="font-data" />
               <el-table-column prop="type" label="类型" width="110" />
-              <el-table-column prop="format" label="格式" width="90" />
+              <el-table-column prop="format" label="格式" width="90" class-name="font-data" />
               <el-table-column label="操作" width="120" fixed="right">
                 <template #default="{ row }">
                   <el-button link type="primary" size="small" @click="openPreview(row)">预览</el-button>
@@ -595,7 +595,7 @@ onMounted(loadData)
 
 /* 左侧树形区域样式 */
 .tree-section {
-  border-right: 1px solid #e4e7ed;
+  border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
 }
@@ -622,12 +622,12 @@ onMounted(loadData)
   font-size: 13px;
 }
 
-.folder-icon { color: #e6a23c; margin-right: 5px; }
-.file-icon { color: #909399; margin-right: 5px; }
+.folder-icon { color: var(--el-color-warning); margin-right: 5px; }
+.file-icon { color: var(--ink-500); margin-right: 5px; }
 
 /* 右侧表格区域样式 */
 .detail-header {
-  border-bottom: 1px solid #f0f2f5;
+  border-bottom: 1px solid var(--line);
   margin-bottom: 10px;
 }
 
@@ -656,7 +656,7 @@ onMounted(loadData)
   justify-content: flex-end;
   align-items: center;
   margin-bottom: 10px;
-  padding: 5px 0;
+  padding: 8px 12px;
 }
 
 .right-actions {

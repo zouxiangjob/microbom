@@ -6,57 +6,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MicroBOM is a BOM (Bill of Materials) management system with a graph-based data model. It combines a FastAPI REST API backend with a NiceGUI-powered web frontend (engineer, purchasing, workshop views), using SQLite as the database.
 
-## Commands
-
-```bash
-# Run the app (dev mode with auto-reload)
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-
-# Seed test data (100 parts + BOM tree + drawings + documents)
-python seed_data.py
-
-# Delete and recreate the database (for schema changes during early dev)
-rm sql_app.db sql_app.db-shm sql_app.db-wal
-# Then restart the app — Base.metadata.create_all runs on startup
-```
-
-No tests, linting, or build steps exist yet.
-
-## Architecture
-
-```
-app/
-├── main.py              # FastAPI app + NiceGUI lifecycle, static mounts, page routes
-├── config.py            # Pydantic Settings (reads .env, defaults)
-├── database/
-│   └── session.py       # Dual engines (async for FastAPI, sync for NiceGUI), session factories
-├── models/
-│   ├── base.py          # ObjectModel, FileModel, RelationModel — the 3 core tables
-│   ├── business.py      # PartModel, DocumentModel, DrawingModel, BOMRelation, etc.
-│   └── __init__.py      # Re-exports Base, FileModel, ObjectModel, RelationModel
-├── api/v1/
-│   ├── __init__.py      # api_router: mounts /files, /nodes, /relations
-│   ├── file.py          # POST /{file_type}/upload, GET /download/{object_id}
-│   ├── nodes.py         # CRUD for polymorphic graph nodes
-│   └── relations.py     # CRUD + CTE traversal for graph edges
-├── services/
-│   ├── graph.py         # AsyncGraphCrudEngine: node/edge CRUD, CTE tree traversal, batch ops
-│   ├── file_service.py  # MD5-deduped async file upload + physical storage
-│   └── s3_service.py    # MinIO/S3 integration (placeholder)
-├── views/
-│   ├── base.py          # render_header, ECNNotifier (engineering change notification bus)
-│   ├── components.py    # render_bom_tree, render_card_header, render_file_row, render_industrial_table
-│   ├── engineer.py      # Part list page with release control
-│   ├── engineer_detail.py  # BOM tree + drawings + documents + child-BOM detail page
-│   ├── purchase.py      # Purchasing audit page
-│   ├── workshop.py      # Workshop view page
-│   └── styles.py        # Global CSS constants (24px industrial-style tables, etc.)
-├── middleware/
-│   └── exceptions.py    # UnifiedResponse schema, BusinessException, global exception handlers
-└── schemas/
-    └── graph_batch.py   # Request schemas for batch graph operations
-```
-
 ## Data Model (the core design)
 
 The system uses **"万物皆对象" (everything is an object)** with polymorphic single-table inheritance via SQLAlchemy:
@@ -76,22 +25,23 @@ The system uses **"万物皆对象" (everything is an object)** with polymorphic
 - Properties are stored as JSON dicts; subclasses expose typed `@property` accessors (e.g., `PartModel.part_number`)
 - Foreign keys use `ON DELETE CASCADE` — deleting an object auto-deletes its edges and files
 
-## Two Database Sessions
+## Database Session (single async engine)
+
+The project uses a single async engine (`sqlite+aiosqlite`) shared by both FastAPI routes and NiceGUI views:
 
 | Layer | Engine | Usage |
 |---|---|---|
-| Async (`engine`) | `sqlite+aiosqlite` | FastAPI route handlers via `Depends(get_db)` |
-| Sync (`sync_engine`) | `sqlite` | NiceGUI views via `get_sync_db()` context manager |
+| Async (`engine`) | `sqlite+aiosqlite` | FastAPI routes via `Depends(get_db)`; NiceGUI views via `async with AsyncSessionLocal()` |
 
-Both engines have PRAGMA listeners for `foreign_keys=ON`, `journal_mode=WAL`, `busy_timeout=5000`.
+A PRAGMA listener on `engine.sync_engine` sets `foreign_keys=ON`, `journal_mode=WAL`, `busy_timeout=5000`.
 
-`AsyncGraphCrudEngine` provides both `async` and `_sync` variants of all methods.
+`AsyncGraphCrudEngine` exposes async-only methods; all view-layer DB access is `await`-ed.
 
 ## NiceGUI vs FastAPI in this project
 
 - **FastAPI** (`app.main:app`): REST API at `/api/v1/*`, static file mounts at `/static/uploads/*`
 - **NiceGUI**: HTML pages registered via `@ui.page(...)` decorators in `main.py`, rendered by the views layer
-- NiceGUI pages use the **sync** database session (`get_sync_db()`) because they run inside the asyncio event loop
+- NiceGUI pages use the same **async** database session (`async with AsyncSessionLocal()`) and `await` all DB calls
 - `ui.run_with(app, ...)` makes NiceGUI piggyback on the FastAPI/uvicorn server
 
 ## File Upload Flow
@@ -106,7 +56,7 @@ Both engines have PRAGMA listeners for `foreign_keys=ON`, `journal_mode=WAL`, `b
 
 - NiceGUI `ui.tree` uses Quasar QTree — `on_select` only fires for leaf nodes, `on_expand` fires for parent nodes. Use both channels (with debounce dedup) to reliably capture all node clicks (see `render_bom_tree` in `components.py`)
 - NiceGUI `ui.upload` callback receives `UploadEventArguments` — file data is at `e.file` (a `FileUpload` object), `read()` is async
-- `Base.metadata.create_all` only creates tables that don't exist; schema changes require manual DB deletion during early dev
+- Schema is managed by Alembic migrations (`alembic upgrade head`), not `Base.metadata.create_all`
 - The `requirements.txt` file has encoding issues (garbled Chinese comments) — be careful when editing
 
 ## Recurring Patterns
@@ -137,4 +87,4 @@ This enables generic endpoints like `POST /api/v1/nodes/{object_type}` where `ob
 
 - `s3_service.py` is an empty placeholder (no usage anywhere)
 - `app/api/v1/nodes.py` defines its own `NodeResponseSchema` that differs from the one in `schemas/graph_batch.py` — be aware of the duplication
-- `Base.metadata.create_all` cannot alter existing tables — schema changes require `rm sql_app.db*` and restart
+- Schema changes are managed by Alembic (`alembic revision --autogenerate` + `alembic upgrade head`); do not delete the database manually

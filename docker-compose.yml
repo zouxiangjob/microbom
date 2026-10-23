@@ -1,0 +1,30 @@
+services:
+  microbom:
+    build:
+      context: .
+    image: microbom:latest
+    container_name: microbom
+    ports:
+      - "8000:8000"
+    environment:
+      # 数据库落在挂载卷上，容器重建不丢数据
+      DATABASE_URL: sqlite+aiosqlite:////app/data/sql_app.db
+      UPLOAD_DIR: /app/uploads
+      EXPORT_DIR: /app/uploads
+      LOG_DIR: /app/logs
+      APP_HOST: http://localhost:8000
+      # 生产环境务必替换为强随机值（可通过 .env 或环境变量注入）
+      FACTORY_STORAGE_SECRET: ${FACTORY_STORAGE_SECRET:-please-change-me}
+      JWT_SECRET: ${JWT_SECRET:-please-change-me}
+      # 开发期关闭鉴权，上线改为 "true"
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+    volumes:
+      - bom_data:/app/data
+      - bom_uploads:/app/uploads
+      - bom_logs:/app/logs
+    restart: unless-stopped
+
+volumes:
+  bom_data:
+  bom_uploads:
+  bom_logs:

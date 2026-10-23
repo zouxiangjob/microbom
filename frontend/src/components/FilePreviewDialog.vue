@@ -188,7 +188,7 @@ const xlsxHtml = computed(() => xlsxPreviewHtml(previewUrl.value))
 .unsupported {
   text-align: center;
   padding: 60px 20px;
-  color: #666;
+  color: var(--ink-500);
 }
 
 .unsupported-icon {

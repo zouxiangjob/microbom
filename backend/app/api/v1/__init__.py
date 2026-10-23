@@ -1,17 +1,26 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.api.deps import get_current_user
 # 核心修正：必须在这里显式导入对应的 router 变量
+from app.api.v1.auth import router as auth_router
+from app.api.v1.baselines import router as baselines_router
 from app.api.v1.file import router as file_router
 from app.api.v1.nodes import router as nodes_router
 from app.api.v1.relations import router as relations_router
 
 api_router = APIRouter()
 
-# 挂载物理文件流相关接口
-api_router.include_router(file_router, prefix="/files", tags=["文件档案管理"])
+# 认证接口：login 公开，其余端点需登录
+api_router.include_router(auth_router, prefix="/auth", tags=["认证"])
 
-# 挂载万物皆对象的“多态节点”通用增删改查接口
-api_router.include_router(nodes_router, prefix="/nodes", tags=["图谱实体节点"])
+# 挂载物理文件流相关接口（需登录）
+api_router.include_router(file_router, prefix="/files", tags=["文件档案管理"], dependencies=[Depends(get_current_user)])
 
-# 挂载建立网络连接、BOM物料树穿透、图谱漫游等高阶接口
-api_router.include_router(relations_router, prefix="/relations", tags=["网状拓扑边与BOM依赖"])
+# 挂载万物皆对象的“多态节点”通用增删改查接口（需登录）
+api_router.include_router(nodes_router, prefix="/nodes", tags=["图谱实体节点"], dependencies=[Depends(get_current_user)])
+
+# 挂载建立网络连接、BOM物料树穿透、图谱漫游等高阶接口（需登录）
+api_router.include_router(relations_router, prefix="/relations", tags=["网状拓扑边与BOM依赖"], dependencies=[Depends(get_current_user)])
+
+# 挂载发布基线专用接口（需登录，独立基线表，与业务表解耦）
+api_router.include_router(baselines_router, prefix="/baselines", tags=["发布基线"], dependencies=[Depends(get_current_user)])

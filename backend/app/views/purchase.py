@@ -8,7 +8,7 @@ import pandas as pd
 from nicegui import ui
 
 from app.config import settings
-from app.database.session import get_sync_db
+from app.database.session import AsyncSessionLocal
 from app.services.graph import AsyncGraphCrudEngine
 from app.views.base import ecn_notifier, render_header
 from app.views.components import render_industrial_table
@@ -20,11 +20,11 @@ EXPORT_FILENAME = '采购订单导入表.xlsx'
 _purchase_table_ref: Optional[ui.table] = None
 
 
-def render_purchase_page() -> None:
+async def render_purchase_page() -> None:
     render_header('purchase')
     _render_ecn_alert()
     _render_toolbar()
-    _render_bom_table()
+    await _render_bom_table()
 
 
 def _render_ecn_alert() -> None:
@@ -56,10 +56,10 @@ def _render_toolbar() -> None:
         ).classes('bg-green-800 text-white font-black text-base px-4 py-2 rounded shadow-md')
 
 
-def _render_bom_table() -> None:
+async def _render_bom_table() -> None:
     global _purchase_table_ref
     with ui.card().classes('w-full p-4 shadow-md bg-white border border-gray-200 mt-2'):
-        rows = _get_purchase_rows()
+        rows = await _get_purchase_rows()
         _purchase_table_ref = render_industrial_table(
             columns=_get_purchase_columns(),
             rows=rows,
@@ -87,13 +87,13 @@ def _inject_qty_edit_slot(table: ui.table) -> None:
     ''')
 
 
-def _export_to_gjp_excel() -> None:
+async def _export_to_gjp_excel() -> None:
     """导出为ERP 标准采购导入格式 Excel，拉取表格实时修改后数据。"""
     try:
         os.makedirs(EXPORT_DIR, exist_ok=True)
 
         # 实时从 UI 表格获取经过用户在线编辑修改后的最新 rows 列表
-        web_edited_rows = _purchase_table_ref.rows if _purchase_table_ref else _get_purchase_rows()
+        web_edited_rows = _purchase_table_ref.rows if _purchase_table_ref else await _get_purchase_rows()
 
         df = pd.DataFrame(web_edited_rows)
         df_gjp = pd.DataFrame()
@@ -129,7 +129,7 @@ def _get_purchase_columns() -> List[dict]:
     ]
 
 
-def _get_purchase_rows() -> List[dict]:
+async def _get_purchase_rows() -> List[dict]:
     """从数据库打平 BOM 树，按零件编码去重汇总，返回采购清单行。"""
-    with get_sync_db() as session:
-        return AsyncGraphCrudEngine.flatten_bom_sync(session)
+    async with AsyncSessionLocal() as session:
+        return await AsyncGraphCrudEngine.flatten_bom(session)

@@ -72,7 +72,7 @@ onMounted(loadNode)
 <style scoped>
 .status-summary {
   font-size: 14px;
-  color: #606266;
+  color: var(--ink-500);
   line-height: 2;
   margin-bottom: 10px;
 }
@@ -80,7 +80,7 @@ onMounted(loadNode)
 .section-title {
   font-size: 14px;
   font-weight: bold;
-  color: #303133;
+  color: var(--ink-900);
   margin: 25px 0 15px 0;
   display: flex;
   align-items: center;
@@ -91,12 +91,12 @@ onMounted(loadNode)
 :deep(.el-descriptions__label) {
   width: 150px;
   justify-content: flex-end;
-  color: #909399;
+  color: var(--ink-500);
   font-weight: normal;
 }
 
 :deep(.el-descriptions__content) {
-  color: #303133;
+  color: var(--ink-700);
 }
 
 .tab-content {

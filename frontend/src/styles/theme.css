@@ -121,6 +121,11 @@ body,
   font-family: var(--font-data);
 }
 
+/* 等宽列内的输入框（如 BOM 数量输入）保持等宽 */
+.font-data .el-input__inner {
+  font-family: var(--font-data);
+}
+
 /* ── 表格：蓝灰表头、紧凑、DIN 表头 ── */
 .el-table {
   --el-table-header-bg-color: #EDF2F8;

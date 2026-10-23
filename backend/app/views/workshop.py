@@ -5,7 +5,7 @@ from typing import Optional
 from nicegui import ui
 
 from app.config import settings
-from app.database.session import get_sync_db
+from app.database.session import AsyncSessionLocal
 from app.models.base import FileModel
 from app.models.business import PartModel, DrawingModel, PartDrawingRelation
 from app.services.graph import AsyncGraphCrudEngine
@@ -33,7 +33,7 @@ def _render_search_bar() -> None:
 
         search_input: Optional[ui.input] = None
 
-        def trigger_search() -> None:
+        async def trigger_search() -> None:
             user_code = search_input.value.strip() if search_input and search_input.value else ''
             if not user_code:
                 ui.notify('请输入有效的物料编码/条码！', type='warning')
@@ -42,7 +42,7 @@ def _render_search_bar() -> None:
             if ecn_notifier.has_notifications:
                 _show_ecn_warning_dialog(user_code)
             else:
-                _load_drawings(user_code)
+                await _load_drawings(user_code)
 
         with ui.row().classes('w-full gap-2 justify-center items-center'):
             search_input = ui.input(placeholder='输入物料代号（如：WD-ZK02）').classes(
@@ -54,21 +54,25 @@ def _render_search_bar() -> None:
 
 
 def _show_ecn_warning_dialog(user_code: str) -> None:
+    async def _confirm_and_load() -> None:
+        dialog.close()
+        await _load_drawings(user_code)
+
     with ui.dialog() as dialog, ui.card().classes('p-6 bg-red-50 border-4 border-red-600 border-dashed'):
         ui.label('🚨 ECN 变更警告！').classes('text-2xl font-black text-red-700')
         ui.label(
             f'您调取的是最新变更物料 [{user_code}]，请注意核对版次是否与看板一致！'
         ).classes('text-lg text-red-900 font-bold my-2 text-center')
-        ui.button('我已明白，立刻看最新电子图', on_click=lambda: (dialog.close(), _load_drawings(user_code))).classes(
+        ui.button('我已明白，立刻看最新电子图', on_click=_confirm_and_load).classes(
             'bg-stone-900 text-white font-bold text-lg px-6 py-2 rounded'
         )
     dialog.open()
 
 
-def _load_drawings(user_code: str) -> None:
+async def _load_drawings(user_code: str) -> None:
     """根据物料编码从数据库查询关联的 3D/2D 图纸文件并渲染。"""
-    with get_sync_db() as session:
-        parts = AsyncGraphCrudEngine.query_nodes_by_property_sync(
+    async with AsyncSessionLocal() as session:
+        parts = await AsyncGraphCrudEngine.query_nodes_by_property(
             session, PartModel, "part_number", user_code
         )
         if not parts:
@@ -80,7 +84,7 @@ def _load_drawings(user_code: str) -> None:
         part_name = part_props.get('name', user_code)
 
         # 查询关联的图纸关系
-        relations = AsyncGraphCrudEngine.query_relations_sync(
+        relations = await AsyncGraphCrudEngine.query_relations(
             session, PartDrawingRelation, source_id=part.id
         )
 
@@ -88,12 +92,12 @@ def _load_drawings(user_code: str) -> None:
         pdf_url = ''
 
         for rel in relations:
-            drawing = AsyncGraphCrudEngine.get_node_by_id_sync(
+            drawing = await AsyncGraphCrudEngine.get_node_by_id(
                 session, DrawingModel, rel.target_id
             )
             if not drawing:
                 continue
-            file_record = session.get(FileModel, rel.target_id)
+            file_record = await session.get(FileModel, rel.target_id)
             if not file_record:
                 continue
 

@@ -7,7 +7,7 @@
 //   drawing:  name / version / drawing_type / format
 //   document: name / doc_version / tag
 
-export const PART_FIELDS = {
+const PART_FIELDS = {
   code: 'part_number',
   name: 'name',
   version: 'version',

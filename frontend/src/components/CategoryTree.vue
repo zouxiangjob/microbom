@@ -71,10 +71,9 @@ import { nodeLabel } from '../api/mapping'
 // 分类树 / BOM 树 / 文档层级等任意树结构。
 //
 // 后端类型前提：objectType / relationType 必须是后端已注册的类型。
-//   - 节点类型（backend nodes.py NODE_TYPE_MAPPER）：part / document / drawing / attachment
-//   - 关系类型（backend relations.py RELATION_TYPE_MAPPER）：bom / part_doc_relation / part_drawing_relation 等
-// 默认值 category / category_relation 目前后端尚未注册，留作未来补 category 类型后的目标；
-// 现在即可复用为 BOM 树：<CategoryTree object-type="part" relation-type="bom" />。
+//   - 节点类型（backend nodes.py NODE_TYPE_MAPPER）：part / document / drawing / attachment / category
+//   - 关系类型（backend relations.py RELATION_TYPE_MAPPER）：bom / part_doc_relation / part_drawing_relation / category_relation / category_part_relation 等
+// 默认值 category / category_relation / category_part_relation 后端均已注册，可直接用作分类树。
 const props = defineProps({
   /** 后端节点对象类型（对应 GET/POST /nodes/{objectType}） */
   objectType: { type: String, default: 'category' },
@@ -351,11 +350,11 @@ defineExpose({ load, treeData })
 .node-actions .el-icon {
   padding: 2px;
   border-radius: 3px;
-  color: #606266;
+  color: var(--ink-500);
 }
 
 .node-actions .el-icon:hover {
-  background: #e6e8eb;
-  color: #2563eb;
+  background: var(--blue-soft);
+  color: var(--blue);
 }
 </style>

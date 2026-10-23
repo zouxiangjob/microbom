@@ -2,11 +2,12 @@ import uuid
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel, Field, ConfigDict  # 🔥 修正：引入 ConfigDict
+from pydantic import BaseModel, Field, ConfigDict
 from starlette import status
 
 from app.api.v1.nodes import NodeResponseSchema
 from app.database.session import get_db
+from app.api.deps import require_roles
 from app.schemas.graph_batch import BatchCreatedResponse, GraphBatchCreateRequest, BatchUpdatedResponse, \
     GraphBatchUpdateRequest, ReverseTreeNodeSchema, OverwriteSuccessResponse, GraphTopologyOverwriteRequest
 
@@ -14,13 +15,12 @@ from app.schemas.graph_batch import RelationCreateSchema, RelationUpdateSchema, 
 
 from app.services.graph import AsyncGraphCrudEngine
 from app.models.base import ObjectModel
-# 导入你的多态关系业务模型
 from app.models.business import BOMRelation, PartDocRelation, PartDrawingRelation, PartModel, DocumentModel, \
     DrawingModel, AttachmentModel, CategoryNodeModel, CategoryRelationModel, CategoryPartRelationModel
 
 router = APIRouter()
 
-# 统一维护的 URL 文本到真实关系 Python 类的映射
+# URL 文本到关系模型类的映射
 RELATION_TYPE_MAPPER = {
     "bom": BOMRelation,
     "bom_relation": BOMRelation,
@@ -32,29 +32,26 @@ RELATION_TYPE_MAPPER = {
     "category_part_relation": CategoryPartRelationModel
 }
 
+
 class TreeNodeSchema(BaseModel):
-    # 🔥 修正：使用 Pydantic 2.0 标准配置
     model_config = ConfigDict(from_attributes=True)
 
-    depth: int = Field(..., description="在依赖树中所处的层级，1代表直属子件")
+    depth: int = Field(..., description="在依赖树中所处的层级，1 代表直属子件")
     edge: RelationResponseSchema = Field(..., description="关系边数据")
     target_node: NodeResponseSchema = Field(..., description="终点目标节点快照")
 
 
-# --- 拓扑图关系及树穿透路由 ---
+# --- 拓扑树穿透路由 ---
 
-# 🔥 修正：必须将特异性高的静态路径路由写在最上方，防止被下面的通用变量路径吞掉
+# 静态路径路由须注册在动态变量路径之前，避免被吞掉
 @router.get("/nodes/{node_id}/tree", response_model=List[TreeNodeSchema],
-            summary="一键穿透获取整棵多级物料BOM/依赖拓扑树")
+            summary="正向穿透获取整棵多级 BOM/依赖拓扑树")
 async def get_object_dependencies_tree(
         node_id: uuid.UUID = Path(..., description="根节点的 UUID"),
         max_depth: int = Query(5, ge=1, le=20, description="限制递归展开的最大深度"),
         db: AsyncSession = Depends(get_db)
 ):
-    """
-    🎯 核心算法接口：传入任意零部件或项目根节点，全自动完成网状拓扑的单次批量穿透
-    """
-    # 先验证根节点是否存在
+    """传入根节点，使用单次递归 CTE 穿透获取整棵依赖树。"""
     root_node = await db.get(ObjectModel, node_id)
     if not root_node:
         raise HTTPException(status_code=404, detail="指定的拓扑根节点不存在")
@@ -62,21 +59,16 @@ async def get_object_dependencies_tree(
     return await AsyncGraphCrudEngine.get_node_tree_by_cte(db, root_id=node_id, max_depth=max_depth)
 
 
-# --- 拓扑图关系及树反向穿透路由 ---
+# --- 拓扑树逆向穿透路由 ---
 
 @router.get("/nodes/{node_id}/reverse-tree", response_model=List[ReverseTreeNodeSchema],
-            summary="🔍 核心王牌：根据子节点一键逆向穿透追溯整棵父级引用网络(Where-Used)")
+            summary="逆向追溯父级引用网络（Where-Used）")
 async def get_object_where_used_tree(
-        node_id: uuid.UUID = Path(..., description="需要逆向追溯的子节点/叶子节点 UUID"),
+        node_id: uuid.UUID = Path(..., description="需要逆向追溯的子节点 UUID"),
         max_depth: int = Query(5, ge=1, le=20, description="限制逆向追踪的最大深度"),
         db: AsyncSession = Depends(get_db)
 ):
-    """
-    🎯 **工业级逆向依赖影响分析网关（Impact Analysis）**
-    传入任意零部件、图纸、或者工艺文档的 UUID，数据库单次全异步交互，
-    即可无损拉出其在整个系统中跨越第1层、第2层、直到最高20层的所有“上游父总成”、“引用拥有者”的完整树。
-    """
-    # 验证当前节点是否存在
+    """传入子节点 UUID，逆向追溯其所有上游父总成与引用拥有者。"""
     leaf_node = await db.get(ObjectModel, node_id)
     if not leaf_node:
         raise HTTPException(status_code=404, detail="指定的逆向溯源目标节点在系统中不存在")
@@ -84,23 +76,27 @@ async def get_object_where_used_tree(
     return await AsyncGraphCrudEngine.get_reverse_node_tree_by_cte(db, leaf_id=node_id, max_depth=max_depth)
 
 
-
-
 @router.post("/{relation_type}", response_model=RelationResponseSchema, status_code=201,
              summary="建立节点之间的拓扑关系边")
 async def create_relation(
         payload: RelationCreateSchema,
         relation_type: str = Path(..., description="可选值: bom, cad_ref, doc_ref"),
-        db: AsyncSession = Depends(get_db)
+        db: AsyncSession = Depends(get_db),
+        _user=Depends(require_roles("admin", "engineer"))
 ):
     if relation_type not in RELATION_TYPE_MAPPER:
         raise HTTPException(status_code=400, detail=f"不支持的关系拓扑类型: {relation_type}")
 
-    # 安全性检查：强体验设计，确保连线的两个端点在数据库里确实存在
+    # 校验连线的两个端点在数据库中确实存在
     source_node = await db.get(ObjectModel, payload.source_id)
     target_node = await db.get(ObjectModel, payload.target_id)
     if not source_node or not target_node:
-        raise HTTPException(status_code=404, detail="无法织网：指定的起点或终点节点在数据库中不存在")
+        raise HTTPException(status_code=404, detail="无法建立关系：指定的起点或终点节点在数据库中不存在")
+
+    # BOM 环检测：source->target 若会让 target 成为自己的祖先，则拒绝
+    if relation_type in ("bom", "bom_relation"):
+        if await AsyncGraphCrudEngine.has_bom_cycle(db, payload.source_id, payload.target_id):
+            raise HTTPException(status_code=422, detail="BOM 环检测失败：该关系会形成循环引用")
 
     model_cls = RELATION_TYPE_MAPPER[relation_type]
     new_edge = model_cls(
@@ -130,7 +126,8 @@ async def update_relation_properties(
         edge_id: uuid.UUID,
         payload: RelationUpdateSchema,
         relation_type: str = Path(...),
-        db: AsyncSession = Depends(get_db)
+        db: AsyncSession = Depends(get_db),
+        _user=Depends(require_roles("admin", "engineer"))
 ):
     if relation_type not in RELATION_TYPE_MAPPER:
         raise HTTPException(status_code=400, detail="不支持的关系类型")
@@ -143,11 +140,12 @@ async def update_relation_properties(
     return await AsyncGraphCrudEngine.update_relation_properties(db, edge, payload.properties)
 
 
-@router.delete("/{relation_type}/{edge_id}", summary="斩断单条图谱关系边")
+@router.delete("/{relation_type}/{edge_id}", summary="删除单条图谱关系边")
 async def delete_relation(
         edge_id: uuid.UUID,
         relation_type: str = Path(...),
-        db: AsyncSession = Depends(get_db)
+        db: AsyncSession = Depends(get_db),
+        _user=Depends(require_roles("admin", "engineer"))
 ):
     if relation_type not in RELATION_TYPE_MAPPER:
         raise HTTPException(status_code=400, detail="不支持的关系类型")
@@ -170,7 +168,7 @@ NODE_MAPPER = {
     "category": CategoryNodeModel
 }
 
-# 关系边类型映射字典（兼容你在路由里的 URL 别名）
+# 关系边类型映射字典
 EDGE_MAPPER = {
     "bom": BOMRelation,
     "bom_relation": BOMRelation,
@@ -182,17 +180,15 @@ EDGE_MAPPER = {
     "category_part_relation": CategoryPartRelationModel
 }
 
+
 @router.post("/batch-ingest", response_model=BatchCreatedResponse, status_code=status.HTTP_201_CREATED,
-             summary="⚡ 工业级子图结构一次性批量原子化洗入网关")
+             summary="批量创建子图")
 async def ingest_sub_graph_batch(
         payload: GraphBatchCreateRequest,
-        db: AsyncSession = Depends(get_db)
+        db: AsyncSession = Depends(get_db),
+        _user=Depends(require_roles("admin", "engineer"))
 ):
-    """
-    ### 批量图谱织网网关
-    前端或 CAD/PLM 插件可以一次性组织整棵 BOM 树、或者一张包含【文档-图纸-附件-零部件】的复杂拓扑子图，
-    通过单个请求打包发送。后端将启用全异步强事务原子锁进行持久化。
-    """
+    """在一个请求中批量写入节点和关系，构建子图，任一环节失败则整体回滚。"""
     if not payload.nodes and not payload.relations:
         raise HTTPException(status_code=400, detail="请求体中节点与关系边集合不能同时为空")
 
@@ -208,35 +204,27 @@ async def ingest_sub_graph_batch(
             "created_edge_ids": edge_ids
         }
     except ValueError as val_err:
-        # 触发上一节编写的 422 友好业务拦截提示
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(val_err))
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"原子批处理执行溃败: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"批量创建失败: {str(e)}")
 
-
-# 追加到 app/api/v1/relations.py 的路由区域
 
 @router.patch("/batch-mutation", response_model=BatchUpdatedResponse,
-              summary="⚡ 工业级子图网络结构属性与拓扑重构批量原子化修改网关")
+              summary="批量修改子图")
 async def update_sub_graph_batch(
         payload: GraphBatchUpdateRequest,
-        db: AsyncSession = Depends(get_db)
+        db: AsyncSession = Depends(get_db),
+        _user=Depends(require_roles("admin", "engineer"))
 ):
-    """
-    ### 批量图谱修改/改签网关
-    支持在单个 HTTP 请求中：
-    1. 批量增量修改任意多态节点（如Part、Document等）的 JSON 动态属性。
-    2. 批量修改关系边上的属性（如修改BOM装配数量）。
-    3. 批量将现有关系边指向新的节点（实现工程图网重构与改签）。
-    """
+    """在一个请求中批量修改节点属性与关系边属性，并支持拓扑重定向。"""
     if not payload.nodes and not payload.relations:
         raise HTTPException(status_code=400, detail="请求体中待更新的节点集合与关系边集合不能同时为空")
 
     try:
         node_count, edge_count = await AsyncGraphCrudEngine.update_graph_batch(
             db=db,
-            node_mappers=NODE_MAPPER,  # 直接复用原有的映射字典
-            edge_mappers=RELATION_TYPE_MAPPER,  # 直接复用原有的映射字典
+            node_mappers=NODE_MAPPER,
+            edge_mappers=RELATION_TYPE_MAPPER,
             batch_data=payload
         )
         return {
@@ -244,25 +232,21 @@ async def update_sub_graph_batch(
             "updated_edge_count": edge_count
         }
     except ValueError as val_err:
-        # 触发全局异常防火墙，向前端吐出高可读性的 422 业务拦截报错
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(val_err))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"原子批量更新处理遭遇意外崩溃: {str(e)}")
+                            detail=f"批量更新失败: {str(e)}")
 
 
 @router.put("/nodes/{root_id}/overwrite", response_model=OverwriteSuccessResponse,
-            summary="🔄 方案 B: 根节点下游拓扑网络全量重写/僵尸数据清空网关")
+            summary="全量重写根节点下游拓扑")
 async def overwrite_sub_graph_topology(
-        root_id: uuid.UUID = Path(..., description="需要重写依赖图网的根节点 UUID（如父零件）"),
+        root_id: uuid.UUID = Path(..., description="需要重写依赖图网的根节点 UUID"),
         payload: GraphTopologyOverwriteRequest = None,
-        db: AsyncSession = Depends(get_db)
+        db: AsyncSession = Depends(get_db),
+        _user=Depends(require_roles("admin", "engineer"))
 ):
-    """
-    ### 拓扑图谱全量洗牌重写网关 (Purge & Replace)
-    前端或 CAD 插件在重新保存 BOM、重新关联图纸时，直接将【当前最新的全量第一层子集结构】推过来。
-    后端会在强事务环境中全自动物理拔除该 root_id 散发的所有旧关系边连线，瞬间换上全量新线。
-    """
+    """清空根节点发出的旧关系边并写入全新关系边（清除后重建）。"""
     if not payload:
         raise HTTPException(status_code=400, detail="请求体不能为空")
     if root_id != payload.root_id:

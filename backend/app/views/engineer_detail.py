@@ -4,13 +4,13 @@
 import hashlib
 import os
 import uuid
-from typing import Any, Callable, Dict, List
+from typing import Any, Awaitable, Callable, Dict, List
 
 from nicegui import app, ui
 from sqlalchemy import select as sa_select
 
 from app.config import settings
-from app.database.session import get_sync_db
+from app.database.session import AsyncSessionLocal
 from app.models.base import ObjectModel, FileModel, RelationModel
 from app.models.business import (
     PartModel, DocumentModel, DrawingModel,
@@ -27,9 +27,9 @@ from app.views.components import (
 )
 from app.views.styles import SECTION_HEADER_CLASSES
 
-# ── 模块级状态：追踪右侧面板当前查看的节点 ID + 刷新回调 ──
+# 模块级状态：追踪右侧面板当前查看的节点 ID + 刷新回调
 _current_view_node_id: str = ""
-_refresh_right_panel_fn: Callable[[str], None] | None = None
+_refresh_right_panel_fn: Callable[[str], Awaitable[None]] | None = None
 
 
 def _clear_view_state() -> None:
@@ -39,39 +39,39 @@ def _clear_view_state() -> None:
     _refresh_right_panel_fn = None
 
 
-def _do_refresh_right_panel(part_id_str: str) -> None:
+async def _do_refresh_right_panel(part_id_str: str) -> None:
     """模块级入口：供 _handle_upload / _handle_remove_file 等外层函数调用。"""
     if _refresh_right_panel_fn and part_id_str:
-        _refresh_right_panel_fn(part_id_str)
+        await _refresh_right_panel_fn(part_id_str)
 
 
-def render_engineer_detail_page() -> None:
+async def render_engineer_detail_page() -> None:
     global _current_view_node_id
     _current_view_node_id = ""  # 每次进入页面时重置
 
     render_header('engineer')
 
-    node_detail = _load_node_detail()
+    node_detail = await _load_node_detail()
     _render_breadcrumb(node_detail)
     _render_main_layout(node_detail)
 
 
-def _load_node_detail() -> Dict[str, Any]:
+async def _load_node_detail() -> Dict[str, Any]:
     """从 storage 或 URL 参数读取物料编码，从数据库加载对应的详情数据。"""
     code = app.storage.user.get('selected_code', '')
     if not code:
         code = ''
-    return _get_node_detail(code)
+    return await _get_node_detail(code)
 
 
-def _get_node_detail(code: str) -> Dict[str, Any]:
+async def _get_node_detail(code: str) -> Dict[str, Any]:
     """根据物料编码从数据库加载节点详情。"""
     if not code:
         return _empty_detail()
 
-    with get_sync_db() as session:
+    async with AsyncSessionLocal() as session:
         # 1. 查找零部件
-        parts = AsyncGraphCrudEngine.query_nodes_by_property_sync(
+        parts = await AsyncGraphCrudEngine.query_nodes_by_property(
             session, PartModel, "part_number", code
         )
         if not parts:
@@ -89,10 +89,10 @@ def _get_node_detail(code: str) -> Dict[str, Any]:
             'designer': props.get('designer', ''),
             'status': props.get('status', '草稿'),
             'type': part.object_type,
-            'drawings': _load_drawings(session, part.id),
-            'documents': _load_documents(session, part.id),
-            'child_bom': _load_child_bom(session, part.id),
-            'tree': _load_bom_tree_data(session, part.id),
+            'drawings': await _load_drawings(session, part.id),
+            'documents': await _load_documents(session, part.id),
+            'child_bom': await _load_child_bom(session, part.id),
+            'tree': await _load_bom_tree_data(session, part.id),
         }
         return detail
 
@@ -114,20 +114,20 @@ def _empty_detail(code: str = 'N/A') -> Dict[str, Any]:
     }
 
 
-def _load_drawings(session, part_id: uuid.UUID) -> List[Dict[str, Any]]:
+async def _load_drawings(session, part_id: uuid.UUID) -> List[Dict[str, Any]]:
     """加载与指定零部件关联的工程图纸列表（仅返回已上传物理文件的条目）。"""
     drawings = []
-    relations = AsyncGraphCrudEngine.query_relations_sync(
+    relations = await AsyncGraphCrudEngine.query_relations(
         session, PartDrawingRelation, source_id=part_id
     )
     for rel in relations:
-        file_record = session.get(FileModel, rel.target_id)
+        file_record = await session.get(FileModel, rel.target_id)
         if not file_record:
             continue  # 跳过未上传物理文件的虚节点
         file_url = f"{settings.APP_HOST}/api/v1/files/download/{file_record.object_id}"
         file_size = _format_file_size(file_record.file_size)
 
-        drawing = session.get(ObjectModel, rel.target_id)
+        drawing = await session.get(ObjectModel, rel.target_id)
         d_props = drawing.properties if drawing and drawing.properties else {}
         drawings.append({
             'name': file_record.original_name,
@@ -141,19 +141,19 @@ def _load_drawings(session, part_id: uuid.UUID) -> List[Dict[str, Any]]:
     return drawings
 
 
-def _load_documents(session, part_id: uuid.UUID) -> List[Dict[str, Any]]:
+async def _load_documents(session, part_id: uuid.UUID) -> List[Dict[str, Any]]:
     """加载与指定零部件关联的技术文档列表（仅返回已上传物理文件的条目）。"""
     documents = []
-    relations = AsyncGraphCrudEngine.query_relations_sync(
+    relations = await AsyncGraphCrudEngine.query_relations(
         session, PartDocRelation, source_id=part_id
     )
     for rel in relations:
-        file_record = session.get(FileModel, rel.target_id)
+        file_record = await session.get(FileModel, rel.target_id)
         if not file_record:
             continue  # 跳过未上传物理文件的虚节点
         file_url = f"{settings.APP_HOST}/api/v1/files/download/{file_record.object_id}"
 
-        doc = session.get(ObjectModel, rel.target_id)
+        doc = await session.get(ObjectModel, rel.target_id)
         d_props = doc.properties if doc and doc.properties else {}
         documents.append({
             'name': file_record.original_name,
@@ -166,14 +166,14 @@ def _load_documents(session, part_id: uuid.UUID) -> List[Dict[str, Any]]:
     return documents
 
 
-def _load_child_bom(session, part_id: uuid.UUID) -> List[Dict[str, Any]]:
+async def _load_child_bom(session, part_id: uuid.UUID) -> List[Dict[str, Any]]:
     """加载直属下级子物料清单（仅 BOM 关系 + PartModel）。"""
     children = []
-    relations = AsyncGraphCrudEngine.query_relations_sync(
+    relations = await AsyncGraphCrudEngine.query_relations(
         session, BOMRelation, source_id=part_id
     )
     for rel in relations:
-        child = session.get(ObjectModel, rel.target_id)
+        child = await session.get(ObjectModel, rel.target_id)
         if not child or child.object_type != 'part':
             continue
         c_props = child.properties if child.properties else {}
@@ -186,38 +186,38 @@ def _load_child_bom(session, part_id: uuid.UUID) -> List[Dict[str, Any]]:
     return children
 
 
-def _load_bom_tree_data(session, part_id: uuid.UUID, max_depth: int = 10) -> List[Dict[str, Any]]:
+async def _load_bom_tree_data(session, part_id: uuid.UUID, max_depth: int = 10) -> List[Dict[str, Any]]:
     """构建纯 BOM 层级树（只包含 object_type="part" 的零部件节点）。"""
-    root = session.get(ObjectModel, part_id)
+    root = await session.get(ObjectModel, part_id)
     root_props = root.properties if root and root.properties else {}
     root_label = root_props.get('part_number') or root_props.get('name') or str(part_id)[:8]
 
-    def _get_bom_children(node_id: uuid.UUID, depth: int = 0) -> List[Dict[str, Any]]:
+    async def _get_bom_children(node_id: uuid.UUID, depth: int = 0) -> List[Dict[str, Any]]:
         if depth >= max_depth:
             return []
         children: List[Dict[str, Any]] = []
-        rels = session.execute(
+        rels = (await session.execute(
             sa_select(BOMRelation).where(BOMRelation.source_id == node_id)
-        ).scalars().all()
+        )).scalars().all()
         for rel in rels:
-            child = session.get(ObjectModel, rel.target_id)
+            child = await session.get(ObjectModel, rel.target_id)
             # 只展示零部件节点，跳过图纸/文档等其他类型
             if not child or child.object_type != 'part':
                 continue
             c_props = child.properties or {}
             child_label = c_props.get('part_number') or c_props.get('name') or str(child.id)[:8]
-            grand_children = _get_bom_children(child.id, depth + 1)
+            grand_children = await _get_bom_children(child.id, depth + 1)
             node: Dict[str, Any] = {
                 'id': str(child.id),
                 'label': child_label,
             }
-            # 叶子节点不包含 children 键 → Quasar 识别为真叶节点 → 触发 update:selected
+            # 叶子节点不包含 children 键，Quasar 识别为真叶节点
             if grand_children:
                 node['children'] = grand_children
             children.append(node)
         return children
 
-    bom_children = _get_bom_children(part_id)
+    bom_children = await _get_bom_children(part_id)
     root_node: Dict[str, Any] = {
         'id': str(part_id),
         'label': root_label,
@@ -227,10 +227,10 @@ def _load_bom_tree_data(session, part_id: uuid.UUID, max_depth: int = 10) -> Lis
     return [root_node]
 
 
-def _load_node_detail_by_id(part_id: uuid.UUID) -> Dict[str, Any]:
+async def _load_node_detail_by_id(part_id: uuid.UUID) -> Dict[str, Any]:
     """根据节点 UUID 加载该节点的元数据、图纸、文档、下级 BOM（不含树）。"""
-    with get_sync_db() as session:
-        obj = session.get(ObjectModel, part_id)
+    async with AsyncSessionLocal() as session:
+        obj = await session.get(ObjectModel, part_id)
         if not obj:
             return _empty_detail()
         props = obj.properties or {}
@@ -242,10 +242,10 @@ def _load_node_detail_by_id(part_id: uuid.UUID) -> Dict[str, Any]:
             'designer': props.get('designer', ''),
             'status': props.get('status', '草稿'),
             'type': obj.object_type,
-            'drawings': _load_drawings(session, obj.id),
-            'documents': _load_documents(session, obj.id),
-            'child_bom': _load_child_bom(session, obj.id),
-            'tree': _load_bom_tree_data(session, obj.id),
+            'drawings': await _load_drawings(session, obj.id),
+            'documents': await _load_documents(session, obj.id),
+            'child_bom': await _load_child_bom(session, obj.id),
+            'tree': await _load_bom_tree_data(session, obj.id),
         }
 
 
@@ -271,7 +271,7 @@ async def _handle_upload(
     relation_class: Any,
     model_class: Any,
 ) -> None:
-    """处理文件上传完整流程：创建目标节点 → 织网连线 → 物理落盘（同一事务）。"""
+    """处理文件上传完整流程：创建目标节点 → 建立关系 → 写入物理文件（同一事务）。"""
     try:
         # NiceGUI UploadEventArguments: 文件信息在 e.file (FileUpload 对象) 中
         filename = e.file.name or 'unknown'
@@ -290,8 +290,8 @@ async def _handle_upload(
 
         file_size = e.file.size()
 
-        # ── 同一事务：创建节点 → 创建关系 → 物理落盘 ──
-        with get_sync_db() as session:
+        # 同一事务：创建节点 → 创建关系 → 物理落盘
+        async with AsyncSessionLocal() as session:
             # 1. 创建目标节点（图纸或文档）
             model_name = os.path.splitext(filename)[0] if '.' in filename else filename
             obj = model_class(
@@ -302,7 +302,7 @@ async def _handle_upload(
                 },
             )
             session.add(obj)
-            session.flush()
+            await session.flush()
 
             # 2. 创建关系连线
             if file_type == 'drawing':
@@ -320,9 +320,9 @@ async def _handle_upload(
                     properties={},
                 )
             session.add(rel)
-            session.flush()
+            await session.flush()
 
-            # 3. 物理落盘 + 创建 FileModel 记账记录
+            # 3. 物理落盘 + 创建 FileModel 记录
             os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 
             file_extension = os.path.splitext(filename)[1].lower() if '.' in filename else ''
@@ -331,9 +331,9 @@ async def _handle_upload(
             file_save_path = os.path.join(settings.UPLOAD_DIR, unique_filename)
 
             # MD5 去重检查
-            existing = session.execute(
+            existing = (await session.execute(
                 sa_select(FileModel).where(FileModel.stored_name == unique_filename)
-            ).scalar_one_or_none()
+            )).scalar_one_or_none()
 
             is_duplicate = False
             if existing and os.path.exists(existing.absolute_path):
@@ -345,7 +345,7 @@ async def _handle_upload(
                 with open(file_save_path, "wb") as f:
                     f.write(content)
 
-            # 创建 FileModel 记账记录
+            # 创建 FileModel 记录
             db_file = FileModel(
                 object_id=obj.id,
                 original_name=filename,
@@ -357,7 +357,7 @@ async def _handle_upload(
             session.add(db_file)
 
             # 更新关联节点属性
-            db_obj = session.get(ObjectModel, obj.id)
+            db_obj = await session.get(ObjectModel, obj.id)
             if db_obj:
                 props = dict(db_obj.properties) if db_obj.properties else {}
                 props["file_status"] = "ready"
@@ -369,13 +369,13 @@ async def _handle_upload(
                 session.add(db_obj)
 
             # 同一事务提交
-            session.commit()
+            await session.commit()
 
         # 4. 关闭对话框并定向刷新右侧面板（避免全页重载后跳回总节点）
         dialog.close()
         ui.notify(f'✅ {filename} 上传成功！', type='positive', position='top')
         # 优先刷新当前查看的子节点面板；若在总节点则刷新总节点面板
-        _do_refresh_right_panel(_current_view_node_id or part_id_str)
+        await _do_refresh_right_panel(_current_view_node_id or part_id_str)
 
     except Exception as exc:
         ui.notify(f'❌ 上传失败: {str(exc)}', type='negative', position='top')
@@ -418,7 +418,7 @@ def _create_upload_dialog(
     return dialog
 
 
-def _handle_remove_file(
+async def _handle_remove_file(
     relation_id: str,
     target_id: str,
     file_name: str,
@@ -428,23 +428,23 @@ def _handle_remove_file(
         rel_uuid = uuid.UUID(relation_id)
         target_uuid = uuid.UUID(target_id)
 
-        with get_sync_db() as session:
+        async with AsyncSessionLocal() as session:
             # 1. 查找并删除关系边
-            relation = session.get(RelationModel, rel_uuid)
+            relation = await session.get(RelationModel, rel_uuid)
             if relation:
-                session.delete(relation)
+                await session.delete(relation)
 
             # 2. 查找目标节点（图纸/文档）及其关联的物理文件路径
-            target_node = session.get(ObjectModel, target_uuid)
+            target_node = await session.get(ObjectModel, target_uuid)
             physical_path = None
             if target_node:
-                file_record = session.get(FileModel, target_uuid)
+                file_record = await session.get(FileModel, target_uuid)
                 if file_record and file_record.absolute_path:
                     physical_path = file_record.absolute_path
                 # 删除节点 → ON DELETE CASCADE 自动清理 FileModel 和其他关系
-                session.delete(target_node)
+                await session.delete(target_node)
 
-            session.commit()
+            await session.commit()
 
         # 3. 事务提交成功后再删除物理文件（避免事务回滚后文件已丢失）
         if physical_path and os.path.exists(physical_path):
@@ -455,7 +455,7 @@ def _handle_remove_file(
 
         ui.notify(f'✅ 已移除文件: {file_name}', type='positive', position='top')
         if _current_view_node_id:
-            _do_refresh_right_panel(_current_view_node_id)
+            await _do_refresh_right_panel(_current_view_node_id)
         else:
             # 总节点视图下没有可追踪的子节点 ID，回退全页重载
             ui.navigate.reload()
@@ -485,13 +485,13 @@ def _render_main_layout(node_detail: Dict[str, Any]) -> None:
     # 闭包捕获右侧面板引用的容器（在 row 内部创建后才赋值）
     _right_panel_ref: List[Any] = [None]
 
-    def _refresh_right_panel(part_id_str: str) -> None:
+    async def _refresh_right_panel(part_id_str: str) -> None:
         """根据节点 UUID 重新加载并渲染右侧面板的全部内容。"""
         right_panel = _right_panel_ref[0]
         if not part_id_str or right_panel is None:
             return
         try:
-            new_detail = _load_node_detail_by_id(uuid.UUID(part_id_str))
+            new_detail = await _load_node_detail_by_id(uuid.UUID(part_id_str))
         except (ValueError, AttributeError):
             return
         right_panel.clear()
@@ -503,20 +503,20 @@ def _render_main_layout(node_detail: Dict[str, Any]) -> None:
     # 注册模块级刷新回调，供 _handle_upload / _handle_remove_file 调用
     _refresh_right_panel_fn = _refresh_right_panel
 
-    def _on_node_click(node_id: str) -> None:
+    async def _on_node_click(node_id: str) -> None:
         """树节点点击回调：刷新右侧图文档面板，并记住当前查看的节点 ID。"""
         global _current_view_node_id
         if node_id:
             _current_view_node_id = node_id
-            _refresh_right_panel(node_id)
+            await _refresh_right_panel(node_id)
 
     with ui.row().classes('w-full p-4 gap-4 items-start'):
-        # ── 左侧列 ──
+        # 左侧列
         with ui.column().classes('w-1/3 gap-4'):
             _render_meta_card(node_detail)
             _render_tree_card(node_detail, on_node_click=_on_node_click)
 
-        # ── 右侧列（在 row 内部创建，确保属于 flex 布局）──
+        # 右侧列（在 row 内部创建，确保属于 flex 布局）
         with ui.column().classes('w-3/5 gap-4') as right_panel:
             _right_panel_ref[0] = right_panel
             _render_drawings_section(node_detail)

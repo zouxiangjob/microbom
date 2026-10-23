@@ -6,7 +6,6 @@
       :data="historyData"
       style="width: 100%"
       size="small"
-      :header-cell-style="{ background: '#fcfcfc', color: '#333' }"
     >
       <el-table-column prop="version" label="修订版本" width="100">
         <template #default="{ row }">

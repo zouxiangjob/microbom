@@ -32,7 +32,7 @@ GLOBAL_CSS = '''
     </style>
 '''
 
-# 工宽行高便于业风大字号表格行内样式与样式类（最大字号 24px，2.2 倍触控）
+# 工业风大字号表格行内样式（最大字号 24px，2.2 倍行高）
 INDUSTRIAL_TABLE_STYLE = 'font-size: 24px; line-height: 2.2; font-weight: 500;'
 INDUSTRIAL_TABLE_CLASSES = 'w-full text-xl'
 

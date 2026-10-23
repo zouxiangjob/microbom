@@ -2,7 +2,7 @@
   <DetailLayout :title="title" :active-tab="cfg.activeTab">
     <div v-loading="loading">
       <!-- 顶部操作工具栏 -->
-      <div class="table-toolbar">
+      <div class="table-toolbar panel">
         <div class="left-placeholder"></div>
         <div class="right-actions">
           <el-button-group>
@@ -33,6 +33,7 @@
           :label="col.label"
           :min-width="col.minWidth"
           :width="col.width"
+          :class-name="col.className"
         >
           <template #default="{ row }">
             <el-link v-if="col.kind === 'link'" type="primary" :underline="false" @click="navigateToObject(row)">
@@ -107,9 +108,9 @@ const KIND_CONFIG = {
     columns: [
       { prop: 'name', label: '名称', minWidth: 160, kind: 'link' },
       { prop: 'relation', label: '关联类型', width: 120 },
-      { prop: 'version', label: '版本', width: 80 },
+      { prop: 'version', label: '版本', width: 80, className: 'font-data' },
       { prop: 'type', label: '类型', width: 120 },
-      { prop: 'format', label: '格式', width: 100 }
+      { prop: 'format', label: '格式', width: 100, className: 'font-data' }
     ]
   },
   document: {
@@ -129,9 +130,9 @@ const KIND_CONFIG = {
     columns: [
       { prop: 'name', label: '名称', minWidth: 180, kind: 'link' },
       { prop: 'type', label: '指派类型', width: 150 },
-      { prop: 'version', label: '修订版本', width: 120 },
-      { prop: 'quantity', label: '数量', width: 100 },
-      { prop: 'unit', label: '单位', width: 100 }
+      { prop: 'version', label: '修订版本', width: 120, className: 'font-data' },
+      { prop: 'quantity', label: '数量', width: 100, className: 'font-data' },
+      { prop: 'unit', label: '单位', width: 100, className: 'font-data' }
     ]
   }
 }
@@ -285,6 +286,7 @@ onMounted(loadData)
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
+  padding: 8px 12px;
 }
 
 .right-actions {

@@ -1,12 +1,5 @@
 import api from './index'
 
-// 文件类型与后端 FILE_TYPE_MAPPER 对齐：attachment / drawing / document
-export const FILE_TYPES = {
-  ATTACHMENT: 'attachment',
-  DRAWING: 'drawing',
-  DOCUMENT: 'document'
-}
-
 // 上传：POST /files/{file_type}/upload（multipart：file + object_id）
 export function uploadFile(fileType, objectId, file) {
   const form = new FormData()

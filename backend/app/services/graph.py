@@ -1,23 +1,60 @@
 import uuid
 from typing import List, Optional, Type, TypeVar, Dict, Any
-from sqlalchemy import select, and_, literal_column  #修正：必须显式导入 literal_column
+from sqlalchemy import select, and_, or_, literal_column
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
 from app.models.base import ObjectModel, RelationModel
 
-# 定义泛型以支持完美的 IDE 类型推导
+# 定义泛型以支持 IDE 类型推导
 T_Node = TypeVar("T_Node", bound=ObjectModel)
 T_Edge = TypeVar("T_Edge", bound=RelationModel)
 
 
-class AsyncGraphCrudEngine:
-    """万物皆对象的全异步通用图谱业务引擎"""
+# ==============================================================================
+# 模糊搜索字段配置：object_type -> 参与 LIKE 匹配的 JSON 属性字段
+# 扩展搜索范围只需在此追加字段，无需改动查询逻辑。
+# ==============================================================================
+SEARCHABLE_FIELDS: Dict[str, List[str]] = {
+    "part": ["part_number", "name", "spec", "material", "designer", "category"],
+    "document": ["name", "tag", "doc_version"],
+    "drawing": ["name", "drawing_type", "version"],
+    "attachment": ["name"],
+    "category": ["name"],
+}
+_DEFAULT_SEARCH_FIELDS = ["part_number", "name"]  # 未知类型兜底
 
-    # ==================== 1. 节点对象 (Node) 业务逻辑 ====================
+
+def _resolve_searchable_fields(object_type: Optional[str]) -> List[str]:
+    """按对象类型解析参与模糊搜索的字段；未指定类型时取所有类型字段并集。"""
+    if object_type and object_type in SEARCHABLE_FIELDS:
+        return SEARCHABLE_FIELDS[object_type]
+    if object_type:
+        return _DEFAULT_SEARCH_FIELDS
+    fields: List[str] = []
+    for fs in SEARCHABLE_FIELDS.values():
+        for f in fs:
+            if f not in fields:
+                fields.append(f)
+    return fields
+
+
+# 关键字段校验配置：object_type -> 创建时必填非空的 JSON 属性字段
+REQUIRED_FIELDS: Dict[str, List[str]] = {
+    "part": ["part_number"],
+    "document": ["name"],
+    "drawing": ["name"],
+    "attachment": ["name"],
+    "category": ["name"],
+}
+
+
+class AsyncGraphCrudEngine:
+    """通用异步图谱业务引擎：基于"万物皆对象"模型提供节点与关系的 CRUD 及图遍历能力。"""
+
+    # ==================== 1. 节点（Node）业务逻辑 ====================
 
     @staticmethod
     async def create_node(db: AsyncSession, node: ObjectModel) -> ObjectModel:
-        """异步创建节点：传入任意子类实例(Part/Document等)，自动识别多态标识并持久化"""
+        """创建节点：根据传入子类的多态标识持久化。"""
         db.add(node)
         await db.commit()
         await db.refresh(node)
@@ -25,7 +62,7 @@ class AsyncGraphCrudEngine:
 
     @staticmethod
     async def get_node_by_id(db: AsyncSession, model_cls: Type[T_Node], node_id: uuid.UUID) -> Optional[T_Node]:
-        """异步精准节点查询：根据指定业务类和 UUID 获取节点，若类型不匹配自动返回 None"""
+        """按业务类和 UUID 查询节点，类型不匹配时返回 None。"""
         node = await db.get(ObjectModel, node_id)
         if isinstance(node, model_cls):
             return node
@@ -34,61 +71,91 @@ class AsyncGraphCrudEngine:
     @staticmethod
     async def query_nodes_by_type(db: AsyncSession, model_cls: Type[T_Node], limit: int = 100, offset: int = 0) -> List[
         T_Node]:
-        """异步分页查询同类节点：例如传入 PartModel，则只筛选出零件类型的列表"""
+        """分页查询同类节点。"""
         stmt = select(model_cls).offset(offset).limit(limit)
         result = await db.execute(stmt)
         return list(result.scalars().all())
 
     @staticmethod
-    def query_nodes_by_type_sync(db: Session, model_cls: Type[T_Node], limit: int = 100, offset: int = 0) -> List[T_Node]:
-        """同步分页查询同类节点：供 NiceGUI 视图层在事件循环内安全使用"""
-        stmt = select(model_cls).offset(offset).limit(limit)
-        result = db.execute(stmt)
-        return list(result.scalars().all())
-
-    @staticmethod
-    def get_node_by_id_sync(db: Session, model_cls: Type[T_Node], node_id: uuid.UUID) -> Optional[T_Node]:
-        """同步精准节点查询：供 NiceGUI 视图层使用"""
-        node = db.get(ObjectModel, node_id)
-        if isinstance(node, model_cls):
-            return node
-        return None
-
-    @staticmethod
-    def query_nodes_by_property_sync(
-            db: Session,
+    async def query_nodes_by_property(
+            db: AsyncSession,
             model_cls: Type[T_Node],
             key: str,
             value: str,
     ) -> List[T_Node]:
-        """同步按 JSON 属性查询节点：在 SQLite 上使用 json_extract 定位匹配行"""
-        # SQLite JSON 提取: json_extract(properties, '$.key') == value
-        json_path = f"$.{key}"
+        """按 JSON 属性精确查询节点（SQLite 使用 json_extract 定位匹配行）。"""
         stmt = select(model_cls).where(
             model_cls.properties[key].as_string() == value
         )
-        result = db.execute(stmt)
+        result = await db.execute(stmt)
         return list(result.scalars().all())
 
     @staticmethod
-    def find_root_assemblies_sync(db: Session) -> List[ObjectModel]:
-        """
-        查找顶层总成：在 BOM 关系中作为起点，但从未作为任何 BOM 关系的终点。
-        即这些是产品树的根节点。
+    async def search_nodes(
+            db: AsyncSession,
+            object_type: Optional[str] = None,
+            keyword: str = "",
+            limit: int = 50,
+    ) -> List[ObjectModel]:
+        """按类型模糊搜索节点：对配置的 JSON 字段做 LIKE 匹配。"""
+        kw = f"%{keyword}%"
+        like_conds = [
+            ObjectModel.properties[f].as_string().like(kw)
+            for f in _resolve_searchable_fields(object_type)
+        ]
+        stmt = select(ObjectModel)
+        if object_type:
+            stmt = stmt.where(ObjectModel.object_type == object_type)
+        stmt = stmt.where(or_(*like_conds)).limit(limit)
+        result = await db.execute(stmt)
+        return list(result.scalars().all())
+
+    @staticmethod
+    def validate_required_fields(object_type: str, properties: Dict[str, Any]) -> Optional[str]:
+        """校验关键字段，返回错误信息；通过返回 None。"""
+        for field in REQUIRED_FIELDS.get(object_type, []):
+            value = (properties or {}).get(field)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                return f"字段 [{field}] 为必填关键字段，不能为空"
+        return None
+
+    @staticmethod
+    async def has_bom_cycle(db: AsyncSession, source_id: uuid.UUID, target_id: uuid.UUID) -> bool:
+        """检测建立 source->target 的 BOM 关系是否会成环。
+
+        逆向遍历 source 的所有 BOM 祖先，若 target 在其中则成环（target 已是 source 的祖先）。
         """
         from app.models.business import BOMRelation
-        # 所有作为 BOM 关系终点的对象（即别人的子件）
+        bom_identity = BOMRelation.__mapper_args__["polymorphic_identity"]
+        anchor = select(RelationModel.source_id).where(
+            RelationModel.target_id == source_id,
+            RelationModel.relation_type == bom_identity,
+        )
+        cte = anchor.cte(name="bom_cycle_cte", recursive=True)
+        recursive = select(RelationModel.source_id).join(
+            cte, RelationModel.target_id == cte.c.source_id
+        ).where(RelationModel.relation_type == bom_identity)
+        full = cte.union(recursive)  # UNION 去重，防止已存在的环导致死循环
+        stmt = select(full.c.source_id).where(full.c.source_id == target_id).limit(1)
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
+    @staticmethod
+    async def find_root_assemblies(db: AsyncSession) -> List[ObjectModel]:
+        """查找顶层总成：在 BOM 关系中作为起点、但从未作为终点的对象，即产品树根节点。"""
+        from app.models.business import BOMRelation
+        # 所有作为 BOM 关系终点的对象（即作为他人子件）
         child_stmt = select(RelationModel.target_id).where(
             RelationModel.relation_type == BOMRelation.__mapper_args__["polymorphic_identity"]
         )
-        child_result = db.execute(child_stmt)
+        child_result = await db.execute(child_stmt)
         child_ids = {row[0] for row in child_result.fetchall()}
 
         # 所有作为 BOM 关系起点的对象
         parent_stmt = select(RelationModel.source_id).where(
             RelationModel.relation_type == BOMRelation.__mapper_args__["polymorphic_identity"]
         )
-        parent_result = db.execute(parent_stmt)
+        parent_result = await db.execute(parent_stmt)
         parent_ids = {row[0] for row in parent_result.fetchall()}
 
         # 根节点 = 父节点集合 - 子节点集合
@@ -96,13 +163,13 @@ class AsyncGraphCrudEngine:
 
         if root_ids:
             roots_stmt = select(ObjectModel).where(ObjectModel.id.in_(root_ids))
-            roots_result = db.execute(roots_stmt)
+            roots_result = await db.execute(roots_stmt)
             return list(roots_result.scalars().all())
         return []
 
     @staticmethod
     async def update_node_properties(db: AsyncSession, node: ObjectModel, updates: Dict[str, Any]) -> ObjectModel:
-        """异步非结构化增量更新：无损合并更新底层的 JSONB/JSON 属性字典"""
+        """增量合并更新节点的 JSON 属性。"""
         current_props = dict(node.properties) if node.properties else {}
         current_props.update(updates)
         node.properties = current_props
@@ -112,16 +179,16 @@ class AsyncGraphCrudEngine:
 
     @staticmethod
     async def delete_node(db: AsyncSession, node: ObjectModel) -> bool:
-        """异步物理级联删除：抹除节点的同时，依赖底层的 ON DELETE CASCADE 自动清理所有关联边"""
+        """删除节点，依赖 ON DELETE CASCADE 自动清理关联关系。"""
         await db.delete(node)
         await db.commit()
         return True
 
-    # ==================== 2. 关系边 (Edge) 业务逻辑 ====================
+    # ==================== 2. 关系边（Edge）业务逻辑 ====================
 
     @staticmethod
     async def create_relation(db: AsyncSession, relation: RelationModel) -> RelationModel:
-        """异步织网：在任意两个已存在的节点之间建立关系连接（如：BOM 组装、文档引用等）"""
+        """在两个已存在节点之间建立关系。"""
         db.add(relation)
         await db.commit()
         await db.refresh(relation)
@@ -129,7 +196,7 @@ class AsyncGraphCrudEngine:
 
     @staticmethod
     async def get_relation_by_id(db: AsyncSession, model_cls: Type[T_Edge], edge_id: uuid.UUID) -> Optional[T_Edge]:
-        """异步精准关系查询：根据特定关系类和 UUID 查询关系边"""
+        """按关系类和 UUID 查询关系边，类型不匹配时返回 None。"""
         edge = await db.get(RelationModel, edge_id)
         if isinstance(edge, model_cls):
             return edge
@@ -142,7 +209,7 @@ class AsyncGraphCrudEngine:
             source_id: Optional[uuid.UUID] = None,
             target_id: Optional[uuid.UUID] = None
     ) -> List[T_Edge]:
-        """动态网状关系过滤：支持按起点、终点或双向共同筛选关系列表"""
+        """按起点、终点或两者共同筛选关系列表。"""
         stmt = select(model_cls)
         filters = []
         if source_id:
@@ -157,28 +224,9 @@ class AsyncGraphCrudEngine:
         return list(result.scalars().all())
 
     @staticmethod
-    def query_relations_sync(
-            db: Session,
-            model_cls: Type[T_Edge],
-            source_id: Optional[uuid.UUID] = None,
-            target_id: Optional[uuid.UUID] = None
-    ) -> List[T_Edge]:
-        """同步动态网状关系过滤：供 NiceGUI 视图层在事件循环内安全使用"""
-        stmt = select(model_cls)
-        filters = []
-        if source_id:
-            filters.append(model_cls.source_id == source_id)
-        if target_id:
-            filters.append(model_cls.target_id == target_id)
-        if filters:
-            stmt = stmt.where(and_(*filters))
-        result = db.execute(stmt)
-        return list(result.scalars().all())
-
-    @staticmethod
     async def update_relation_properties(db: AsyncSession, relation: RelationModel,
                                          updates: Dict[str, Any]) -> RelationModel:
-        """异步更新关系边属性：例如修改 BOM 关系中的数量(quantity)或装配位置"""
+        """增量合并更新关系边的属性（如装配数量、位置）。"""
         current_props = dict(relation.properties) if relation.properties else {}
         current_props.update(updates)
         relation.properties = current_props
@@ -188,12 +236,12 @@ class AsyncGraphCrudEngine:
 
     @staticmethod
     async def delete_relation(db: AsyncSession, relation: RelationModel) -> bool:
-        """异步斩断关系：仅删除关联边本身，绝对不伤及两侧连接的节点实体"""
+        """删除关系边，不影响两端的节点。"""
         await db.delete(relation)
         await db.commit()
         return True
 
-    # ==================== 3. 拓扑图谱穿透 (Graph Traversal) 业务逻辑 ====================
+    # ==================== 3. 图遍历（正向 / 逆向） ====================
 
     @staticmethod
     async def get_node_tree_by_cte(
@@ -201,11 +249,8 @@ class AsyncGraphCrudEngine:
             root_id: uuid.UUID,
             max_depth: int = 10
     ) -> List[Dict[str, Any]]:
-        """
-        🚀 异步单次数据库穿透：使用 CTE 递归查询从指定根节点出发的整棵 BOM 树
-        返回结果包含：所有关联的边、节点数据以及它们在这棵树中所处的深度(depth)
-        """
-        # 1. 定义递归初始条件（Anchor Member）：从 root_id 散发出的第一层关系边
+        """使用递归 CTE 从指定根节点正向遍历整棵树，返回带深度的边与节点列表。"""
+        # 1. 递归初始条件（Anchor）：从 root_id 发出的第一层关系边
         anchor_stmt = select(
             RelationModel.id,
             RelationModel.relation_type,
@@ -215,10 +260,10 @@ class AsyncGraphCrudEngine:
             literal_column("1").label("depth")
         ).where(RelationModel.source_id == root_id)
 
-        # 2. 构造 CTE 递归容器
+        # 2. 构造递归 CTE 容器
         cte_expr = anchor_stmt.cte(name="graph_tree_cte", recursive=True)
 
-        # 3. 定义递归关联条件（Recursive Member）：将上一层的 target_id 绑定为下一层的 source_id
+        # 3. 递归成员（Recursive）：将上一层的 target_id 绑定为下一层的 source_id
         recursive_stmt = select(
             RelationModel.id,
             RelationModel.relation_type,
@@ -227,13 +272,13 @@ class AsyncGraphCrudEngine:
             RelationModel.properties,
             (cte_expr.c.depth + 1).label("depth")
         ).join(cte_expr, RelationModel.source_id == cte_expr.c.target_id).where(
-            cte_expr.c.depth < max_depth  # 防御死循环爆破
+            cte_expr.c.depth < max_depth  # 深度上限，防止环导致的无限递归
         )
 
-        # 4. 复合两部分 SQL 表达式
+        # 4. 合并初始条件与递归成员
         final_cte = cte_expr.union_all(recursive_stmt)
 
-        # 5. 执行查询，同时连表拉出 target 节点的详情信息，做到一步到位
+        # 5. 连表取出 target 节点的详情
         stmt = select(
             final_cte.c.id.label("edge_id"),
             final_cte.c.relation_type,
@@ -247,7 +292,7 @@ class AsyncGraphCrudEngine:
 
         result = await db.execute(stmt)
 
-        # 6. 转化为规整的字典结构，方便 FastAPI 自动序列化
+        # 6. 转为规整字典结构
         tree_nodes = []
         for row in result.mappings():
             tree_nodes.append({
@@ -267,81 +312,16 @@ class AsyncGraphCrudEngine:
             })
         return tree_nodes
 
-    @staticmethod
-    def get_node_tree_by_cte_sync(
-            db: Session,
-            root_id: uuid.UUID,
-            max_depth: int = 10
-    ) -> List[Dict[str, Any]]:
-        """同步 CTE 正向 BOM 树穿透：供 NiceGUI 视图层在事件循环内安全使用"""
-        anchor_stmt = select(
-            RelationModel.id,
-            RelationModel.relation_type,
-            RelationModel.source_id,
-            RelationModel.target_id,
-            RelationModel.properties,
-            literal_column("1").label("depth")
-        ).where(RelationModel.source_id == root_id)
+    # ==================== 3b. 逆向遍历（影响分析 / Where-Used） ====================
 
-        cte_expr = anchor_stmt.cte(name="graph_tree_cte_sync", recursive=True)
-
-        recursive_stmt = select(
-            RelationModel.id,
-            RelationModel.relation_type,
-            RelationModel.source_id,
-            RelationModel.target_id,
-            RelationModel.properties,
-            (cte_expr.c.depth + 1).label("depth")
-        ).join(cte_expr, RelationModel.source_id == cte_expr.c.target_id).where(
-            cte_expr.c.depth < max_depth
-        )
-
-        final_cte = cte_expr.union_all(recursive_stmt)
-
-        stmt = select(
-            final_cte.c.id.label("edge_id"),
-            final_cte.c.relation_type,
-            final_cte.c.source_id,
-            final_cte.c.target_id,
-            final_cte.c.properties.label("edge_properties"),
-            final_cte.c.depth,
-            ObjectModel.object_type.label("target_type"),
-            ObjectModel.properties.label("target_properties")
-        ).join(ObjectModel, ObjectModel.id == final_cte.c.target_id)
-
-        result = db.execute(stmt)
-
-        tree_nodes = []
-        for row in result.mappings():
-            tree_nodes.append({
-                "edge": {
-                    "id": row["edge_id"],
-                    "relation_type": row["relation_type"],
-                    "source_id": row["source_id"],
-                    "target_id": row["target_id"],
-                    "properties": row["edge_properties"]
-                },
-                "depth": row["depth"],
-                "target_node": {
-                    "id": row["target_id"],
-                    "object_type": row["target_type"],
-                    "properties": row["target_properties"]
-                }
-            })
-        return tree_nodes
-
-    # ==================== 3. 拓扑图谱反查穿透 (Reverse Impact Analysis / Where-Used Query) 业务逻辑 ====================
     @staticmethod
     async def get_reverse_node_tree_by_cte(
             db: AsyncSession,
             leaf_id: uuid.UUID,
             max_depth: int = 10
     ) -> List[Dict[str, Any]]:
-        """
-        🚀 逆向依赖一键穿透：使用 CTE 递归向上追溯引用的父节点/上级网络
-        返回结果包含：所有逆向关联的边、上级父节点数据以及它们所处的逆向深度(depth)
-        """
-        # 1. 定义逆向递归初始条件（Anchor Member）：谁指向了我（target_id == leaf_id）
+        """使用递归 CTE 从指定节点逆向向上追溯父级引用网络。"""
+        # 1. 逆向递归初始条件（Anchor）：谁指向了我（target_id == leaf_id）
         anchor_stmt = select(
             RelationModel.id,
             RelationModel.relation_type,
@@ -351,10 +331,10 @@ class AsyncGraphCrudEngine:
             literal_column("1").label("depth")
         ).where(RelationModel.target_id == leaf_id)
 
-        # 2. 构造逆向 CTE 递归容器
+        # 2. 构造逆向递归 CTE 容器
         cte_expr = anchor_stmt.cte(name="reverse_graph_tree_cte", recursive=True)
 
-        # 3. 定义逆向关联条件（Recursive Member）：将上一层的 source_id 绑定为下一层的 target_id（向上追溯）
+        # 3. 逆向递归成员：将上一层的 source_id 绑定为下一层的 target_id（向上追溯）
         recursive_stmt = select(
             RelationModel.id,
             RelationModel.relation_type,
@@ -363,13 +343,13 @@ class AsyncGraphCrudEngine:
             RelationModel.properties,
             (cte_expr.c.depth + 1).label("depth")
         ).join(cte_expr, RelationModel.target_id == cte_expr.c.source_id).where(
-            cte_expr.c.depth < max_depth  # 防御死循环爆破
+            cte_expr.c.depth < max_depth  # 深度上限，防止环导致的无限递归
         )
 
-        # 4. 复合两部分 SQL 表达式
+        # 4. 合并初始条件与递归成员
         final_cte = cte_expr.union_all(recursive_stmt)
 
-        # 5. 执行查询，同时连表拉出起点（source_id）对应的上级父节点详情信息
+        # 5. 连表取出起点（source_id）对应的上级节点详情
         stmt = select(
             final_cte.c.id.label("edge_id"),
             final_cte.c.relation_type,
@@ -379,11 +359,11 @@ class AsyncGraphCrudEngine:
             final_cte.c.depth,
             ObjectModel.object_type.label("source_type"),
             ObjectModel.properties.label("source_properties")
-        ).join(ObjectModel, ObjectModel.id == final_cte.c.source_id)  # 🔥 核心对调：连接的是 source_id
+        ).join(ObjectModel, ObjectModel.id == final_cte.c.source_id)  # 逆向连接的是 source_id
 
         result = await db.execute(stmt)
 
-        # 6. 转化为规整的字典结构，方便 FastAPI 自动序列化
+        # 6. 转为规整字典结构
         tree_nodes = []
         for row in result.mappings():
             tree_nodes.append({
@@ -395,78 +375,13 @@ class AsyncGraphCrudEngine:
                     "properties": row["edge_properties"]
                 },
                 "depth": row["depth"],
-                "source_node": {  # 🔥 返回给前端：当前层级捕获到的“上级父节点”
+                "source_node": {  # 返回的是当前层级捕获到的上级父节点
                     "id": row["source_id"],
                     "object_type": row["source_type"],
                     "properties": row["source_properties"]
                 }
             })
         return tree_nodes
-
-    @staticmethod
-    def get_reverse_node_tree_by_cte_sync(
-            db: Session,
-            leaf_id: uuid.UUID,
-            max_depth: int = 10
-    ) -> List[Dict[str, Any]]:
-        """同步逆向 CTE 追溯：供 NiceGUI 视图层在事件循环内安全使用"""
-        anchor_stmt = select(
-            RelationModel.id,
-            RelationModel.relation_type,
-            RelationModel.source_id,
-            RelationModel.target_id,
-            RelationModel.properties,
-            literal_column("1").label("depth")
-        ).where(RelationModel.target_id == leaf_id)
-
-        cte_expr = anchor_stmt.cte(name="reverse_graph_tree_cte_sync", recursive=True)
-
-        recursive_stmt = select(
-            RelationModel.id,
-            RelationModel.relation_type,
-            RelationModel.source_id,
-            RelationModel.target_id,
-            RelationModel.properties,
-            (cte_expr.c.depth + 1).label("depth")
-        ).join(cte_expr, RelationModel.target_id == cte_expr.c.source_id).where(
-            cte_expr.c.depth < max_depth
-        )
-
-        final_cte = cte_expr.union_all(recursive_stmt)
-
-        stmt = select(
-            final_cte.c.id.label("edge_id"),
-            final_cte.c.relation_type,
-            final_cte.c.source_id,
-            final_cte.c.target_id,
-            final_cte.c.properties.label("edge_properties"),
-            final_cte.c.depth,
-            ObjectModel.object_type.label("source_type"),
-            ObjectModel.properties.label("source_properties")
-        ).join(ObjectModel, ObjectModel.id == final_cte.c.source_id)
-
-        result = db.execute(stmt)
-
-        tree_nodes = []
-        for row in result.mappings():
-            tree_nodes.append({
-                "edge": {
-                    "id": row["edge_id"],
-                    "relation_type": row["relation_type"],
-                    "source_id": row["source_id"],
-                    "target_id": row["target_id"],
-                    "properties": row["edge_properties"]
-                },
-                "depth": row["depth"],
-                "source_node": {
-                    "id": row["source_id"],
-                    "object_type": row["source_type"],
-                    "properties": row["source_properties"]
-                }
-            })
-        return tree_nodes
-
-
 
     @staticmethod
     async def create_graph_batch(
@@ -475,25 +390,22 @@ class AsyncGraphCrudEngine:
             edge_mappers: dict[str, Type],
             batch_data: Any  # 接收路由传入的 Schema 实例
     ) -> tuple[List[uuid.UUID], List[uuid.UUID]]:
-        """
-        🚀 工业级子图原子化写入引擎
-        在同一个数据库事务内，批量洗入节点，随后统一织网连线，失败则全盘回滚。
-        """
+        """批量创建子图：在同一事务内批量写入节点和关系，失败则整体回滚。"""
         created_node_ids = []
         created_edge_ids = []
 
-        # 内存映射缓存，用于在单次批处理中快速验证节点是否存在
+        # 内存缓存，用于快速校验本次批次内的节点是否存在
         local_node_id_set = set()
 
         try:
-            # ==== 第一阶段：批量实例化并灌入节点 ====
+            # 第一阶段：批量实例化并写入节点
             for node_item in batch_data.nodes:
                 if node_item.object_type not in node_mappers:
                     raise ValueError(f"批量终止：未注册的节点类型 '{node_item.object_type}'")
 
                 model_cls = node_mappers[node_item.object_type]
 
-                # 🎯 核心防御：如果前端传了 ID 就用前端的，没传系统就原子化生成一个
+                # 前端传了 ID 则使用，否则系统生成
                 final_id = node_item.id if node_item.id is not None else uuid.uuid4()
 
                 new_node = model_cls(
@@ -504,21 +416,19 @@ class AsyncGraphCrudEngine:
                 created_node_ids.append(new_node.id)
                 local_node_id_set.add(str(new_node.id))
 
-            # ==== 第二阶段：批量建立关系网络 ====
+            # 第二阶段：批量建立关系
             for edge_item in batch_data.relations:
                 if edge_item.relation_type not in edge_mappers:
                     raise ValueError(f"批量终止：未注册的关系边类型 '{edge_item.relation_type}'")
 
-                # 防御性图校验：验证连线的两端是否合法（要么在本次新建里，要么在老数据库里）
+                # 校验连线两端是否合法（在本次新建列表中，或已存在于数据库）
                 for n_id, role in [(edge_item.source_id, "起点"), (edge_item.target_id, "终点")]:
                     if str(n_id) not in local_node_id_set:
-                        # 如果不在本次新建列表中，再去数据库里扫一眼看存不存在
                         exists_node = await db.get(ObjectModel, n_id)
                         if not exists_node:
                             raise ValueError(
-                                f"网状拓扑中断：连线【{edge_item.relation_type}】指定的{role} ID [{n_id}] 在系统中物理不存在，无法织网")
+                                f"网状拓扑中断：连线【{edge_item.relation_type}】指定的{role} ID [{n_id}] 在系统中不存在")
 
-                # 获取关系多态类并实例化
                 edge_cls = edge_mappers[edge_item.relation_type]
                 new_edge = edge_cls(
                     id=uuid.uuid4(),
@@ -529,15 +439,14 @@ class AsyncGraphCrudEngine:
                 db.add(new_edge)
                 created_edge_ids.append(new_edge.id)
 
-            # ==== 第三阶段：原子化统一提交 ====
+            # 第三阶段：统一提交
             await db.commit()
             return created_node_ids, created_edge_ids
 
         except Exception as batch_err:
-            # 🚨 只要任何一个环节由于脏数据出现异动，全盘撤销，绝不留任何无头死线！
+            # 任何环节出错则整体回滚，不留残缺数据
             await db.rollback()
             raise batch_err
-
 
     @staticmethod
     async def update_graph_batch(
@@ -546,36 +455,31 @@ class AsyncGraphCrudEngine:
             edge_mappers: dict[str, Type],
             batch_data: Any  # 接收 GraphBatchUpdateRequest 实例
     ) -> tuple[int, int]:
-        """
-        🚀 工业级子图原子化批量修改引擎 (Mutation Engine)
-        全异步增量覆盖节点 JSON 属性，同时支持关系边属性的无损 Upsert 及拓扑重定向连线。
-        任意单条记录未找到或类型错配，整个子图变更动作瞬间安全回滚。
-        """
+        """批量修改子图：增量更新节点属性，支持关系边属性更新与拓扑重定向，失败则整体回滚。"""
         updated_nodes = 0
         updated_edges = 0
 
         try:
-            # ==== 第一阶段：批量增量更新节点非结构化属性 ====
+            # 第一阶段：批量增量更新节点属性
             for node_item in batch_data.nodes:
                 if node_item.object_type not in node_mappers:
                     raise ValueError(f"批量修改终止：未注册的节点多态类型 '{node_item.object_type}'")
 
                 model_cls = node_mappers[node_item.object_type]
-                # 精准提取并校验类型安全性，防止越权改数
                 node_obj = await db.get(model_cls, node_item.id)
                 if not node_obj:
                     raise ValueError(f"修改失败：目标节点 [{node_item.id}] 不存在或类型不是 '{node_item.object_type}'")
 
-                # 内存无损增量合并字典
+                # 增量合并属性字典
                 current_props = dict(node_obj.properties) if node_obj.properties else {}
                 current_props.update(node_item.properties)
 
-                # 重新赋值：依赖 MutableDict 自动勾起 SQLAlchemy 的 dirty 标记触发 UPDATE 行为
+                # 重新赋值以触发 SQLAlchemy 变更追踪
                 node_obj.properties = current_props
                 db.add(node_obj)
                 updated_nodes += 1
 
-            # ==== 第二阶段：批量修改关系边属性或拓扑图重定向 ====
+            # 第二阶段：批量修改关系边属性或拓扑重定向
             for edge_item in batch_data.relations:
                 if edge_item.relation_type not in edge_mappers:
                     raise ValueError(f"批量修改终止：未注册的关系边类型 '{edge_item.relation_type}'")
@@ -586,20 +490,20 @@ class AsyncGraphCrudEngine:
                     raise ValueError(
                         f"修改失败：目标关系边 [{edge_item.id}] 不存在或类型不是 '{edge_item.relation_type}'")
 
-                # 场景 A：如果前端申请了【拓扑改签/图重构】，必须防御式检验新改签的节点是否存在
+                # 场景 A：拓扑重定向（修改起点/终点），需校验新节点存在
                 if edge_item.source_id:
                     src_check = await db.get(ObjectModel, edge_item.source_id)
                     if not src_check:
-                        raise ValueError(f"拓扑改签失败：新设定的起点节点 [{edge_item.source_id}] 在系统中物理不存在")
+                        raise ValueError(f"拓扑重定向失败：新设定的起点节点 [{edge_item.source_id}] 在系统中不存在")
                     edge_obj.source_id = edge_item.source_id
 
                 if edge_item.target_id:
                     tgt_check = await db.get(ObjectModel, edge_item.target_id)
                     if not tgt_check:
-                        raise ValueError(f"拓扑改签失败：新设定的终点节点 [{edge_item.target_id}] 在系统中物理不存在")
+                        raise ValueError(f"拓扑重定向失败：新设定的终点节点 [{edge_item.target_id}] 在系统中不存在")
                     edge_obj.target_id = edge_item.target_id
 
-                # 场景 B：增量更新关系边自身的非结构化属性
+                # 场景 B：增量更新关系边属性
                 if edge_item.properties:
                     current_edge_props = dict(edge_obj.properties) if edge_obj.properties else {}
                     current_edge_props.update(edge_item.properties)
@@ -608,17 +512,15 @@ class AsyncGraphCrudEngine:
                 db.add(edge_obj)
                 updated_edges += 1
 
-            # ==== 第三阶段：强事务统一原子提交 ====
+            # 第三阶段：统一提交
             await db.commit()
             return updated_nodes, updated_edges
 
         except Exception as batch_err:
-            # 🚨 整个批量变更动作中，任何一条数据出现差错，全盘撤销，确保数据库脏数据零残留
+            # 任何环节出错则整体回滚
             await db.rollback()
             raise batch_err
 
-
-    # 全量覆盖子图结构
     @staticmethod
     async def overwrite_graph_topology(
             db: AsyncSession,
@@ -626,18 +528,18 @@ class AsyncGraphCrudEngine:
             edge_mappers: dict[str, Type],
             batch_data: Any  # 接收 GraphTopologyOverwriteRequest 实例
     ) -> tuple[int, int]:
-        """
-        🚀 方案 B: 工业级图拓扑全量重写引擎 (Purge & Replace)
-        1. 增量更新或注入传入的子节点属性。
-        2. 在同一个事务中，一键物理清空以 root_id 为源头发出的所有旧关系边。
-        3. 瞬间灌入全新的网络边，若中途有任何端点不存在或崩溃，旧网络全自动原地复活（强事务隔离）。
+        """全量重写子图拓扑（清除后重建）。
+
+        1. 增量更新或创建传入的子节点属性。
+        2. 清空以 root_id 为源头发出的所有旧关系边。
+        3. 写入全新关系边，任一步失败则整体回滚，旧结构保留。
         """
         purged_count = 0
         inserted_count = 0
         local_known_node_ids = {str(batch_data.root_id)}
 
         try:
-            # ==== 步骤 1: 增量洗数更新或创建随同传入的子节点 ====
+            # 步骤 1：增量更新或创建传入的子节点
             for node_item in batch_data.nodes:
                 local_known_node_ids.add(str(node_item.id))
                 if node_item.object_type not in node_mappers:
@@ -647,79 +549,75 @@ class AsyncGraphCrudEngine:
                 node_obj = await db.get(model_cls, node_item.id)
 
                 if node_obj:
-                    # 节点已存在：执行无损增量合并属性
+                    # 节点已存在：增量合并属性
                     current_props = dict(node_obj.properties) if node_obj.properties else {}
                     current_props.update(node_item.properties)
                     node_obj.properties = current_props
                 else:
-                    # 节点不存在：直接在事务中就地补全创建
+                    # 节点不存在：创建
                     node_obj = model_cls(id=node_item.id, properties=node_item.properties)
 
                 db.add(node_obj)
 
-            # ==== 步骤 2: 【核心 Purge】一键斩断当前根节点发出的所有旧连线 ====
-            # 查出当前以 root_id 为起点发出的所有老边
+            # 步骤 2：清空以 root_id 为起点发出的所有旧关系边
             old_edges_stmt = select(RelationModel).where(RelationModel.source_id == batch_data.root_id)
             old_edges_res = await db.execute(old_edges_stmt)
             old_edges_list = old_edges_res.scalars().all()
 
             purged_count = len(old_edges_list)
             for old_edge in old_edges_list:
-                await db.delete(old_edge)  # 纳入 session 等待一并清理
+                await db.delete(old_edge)
 
-            # 执行一次 flush，确保旧线在底层被抹除，防止联合唯一索引或主键冲突
+            # flush 确保旧边在底层被删除，避免唯一索引或主键冲突
             await db.flush()
 
-            # ==== 步骤 3: 【核心 Replace】将前端最新的连线网一气呵成灌入 ====
+            # 步骤 3：写入全新关系边
             for edge_item in batch_data.relations:
                 if edge_item.relation_type not in edge_mappers:
                     raise ValueError(f"重写终止：未注册的关系连线类型 '{edge_item.relation_type}'")
 
-                # 防御式图校验：确保连线的终点节点在本次提交或老数据库中物理真实存在
+                # 校验终点节点存在（本次提交或已存在于数据库）
                 if str(edge_item.target_id) not in local_known_node_ids:
                     exists_node = await db.get(ObjectModel, edge_item.target_id)
                     if not exists_node:
-                        raise ValueError(f"重写图败退：新网络中指定的终点节点 [{edge_item.target_id}] 物理不存在")
+                        raise ValueError(f"重写失败：新网络中指定的终点节点 [{edge_item.target_id}] 不存在")
 
                 edge_cls = edge_mappers[edge_item.relation_type]
                 new_edge = edge_cls(
                     id=uuid.uuid4(),
-                    source_id=batch_data.root_id,  # 起点永远锁死为当前重写的根节点
+                    source_id=batch_data.root_id,  # 起点固定为当前重写的根节点
                     target_id=edge_item.target_id,
                     properties=edge_item.properties
                 )
                 db.add(new_edge)
                 inserted_count += 1
 
-            # ==== 步骤 4: 原子化原子锁统一提交 ====
+            # 步骤 4：统一提交
             await db.commit()
             return purged_count, inserted_count
 
         except Exception as overwrite_err:
-            # 🚨 防御熔断：哪怕新连线里有一个 UUID 写错，老网络瞬间完好无损地就地复活！
+            # 任何环节出错则整体回滚，旧结构不受影响
             await db.rollback()
             raise overwrite_err
 
-    # ==================== 4. BOM 打平与汇总引擎 ====================
+    # ==================== 4. BOM 打平与汇总 ====================
 
     @staticmethod
-    def flatten_bom_sync(db: Session) -> List[Dict[str, Any]]:
-        """
-        全量 BOM 打平汇总：遍历所有顶层总成，递归展开 BOM 树，
-        按零件编码聚合数量，返回去重后的采购清单。
-        """
-        from app.models.business import BOMRelation, PartModel
+    async def flatten_bom(db: AsyncSession) -> List[Dict[str, Any]]:
+        """全量 BOM 打平汇总：遍历所有顶层总成，递归展开 BOM，按零件编码聚合数量。"""
+        from app.models.business import PartModel
 
-        roots = AsyncGraphCrudEngine.find_root_assemblies_sync(db)
-        # 如果没有根节点，回退为查询所有 PartModel
+        roots = await AsyncGraphCrudEngine.find_root_assemblies(db)
+        # 若无根节点，回退为查询所有零部件
         if not roots:
-            roots = AsyncGraphCrudEngine.query_nodes_by_type_sync(db, PartModel, limit=1000)
+            roots = await AsyncGraphCrudEngine.query_nodes_by_type(db, PartModel, limit=1000)
 
         aggregated: Dict[str, Dict[str, Any]] = {}
 
         for root in roots:
-            tree = AsyncGraphCrudEngine.get_node_tree_by_cte_sync(db, root.id, max_depth=20)
-            # 根节点本身也可能需要采购（如果是外购件）
+            tree = await AsyncGraphCrudEngine.get_node_tree_by_cte(db, root.id, max_depth=20)
+            # 根节点本身也可能需要采购（外购件）
             root_props = root.properties if root.properties else {}
             root_code = root_props.get("part_number", "") or str(root.id)[:8]
             _aggregate_part(aggregated, root, root_props, 1)
@@ -730,7 +628,7 @@ class AsyncGraphCrudEngine:
                 quantity = edge_props.get("quantity", 1) if isinstance(edge_props, dict) else 1
                 target_props = target.get("properties", {}) if isinstance(target.get("properties"), dict) else {}
                 tgt_id = target["id"]
-                tgt_node = db.get(ObjectModel, tgt_id)
+                tgt_node = await db.get(ObjectModel, tgt_id)
                 if tgt_node:
                     _aggregate_part(aggregated, tgt_node, target_props, quantity)
 
@@ -747,11 +645,11 @@ class AsyncGraphCrudEngine:
 
 
 # ==============================================================================
-# 5. 工具函数（模块级别）
+# 5. 模块级工具函数
 # ==============================================================================
 
 def _aggregate_part(aggregated: Dict[str, Dict[str, Any]], node: ObjectModel, props: Dict[str, Any], qty: int) -> None:
-    """将节点按 part_number 聚合到累计字典中"""
+    """将节点按 part_number 聚合到累计字典中。"""
     code = props.get("part_number", "") or str(node.id)[:8]
     if code not in aggregated:
         aggregated[code] = {
@@ -764,9 +662,9 @@ def _aggregate_part(aggregated: Dict[str, Dict[str, Any]], node: ObjectModel, pr
 
 
 def cte_flat_to_nested_tree(flat_nodes: List[Dict[str, Any]], root_id: uuid.UUID) -> List[Dict[str, Any]]:
-    """
-    将 CTE 穿透返回的平铺列表转换为 NiceGUI ui.tree 所需的嵌套结构。
-    每个 flat node 包含: {edge, depth, target_node}
+    """将 CTE 返回的平铺列表转换为 NiceGUI ui.tree 所需的嵌套结构。
+
+    每个平铺节点包含：{edge, depth, target_node}
     """
     # 按 source_id 分组，建立 parent -> children 映射
     children_map: Dict[str, List[Dict[str, Any]]] = {}

@@ -2,6 +2,7 @@
 可复用的 UI 组件函数，优化上下文管理器与渲染逻辑。
 """
 import base64
+import inspect
 import os
 from typing import Any, Callable, List, Optional, Set
 
@@ -170,6 +171,13 @@ def _build_preview_iframe(template: str, file_url: str) -> str:
     )
 
 
+async def _call_handler(handler: Callable, *args: Any) -> None:
+    """统一调用事件处理器，兼容同步与异步两种实现。"""
+    result = handler(*args)
+    if inspect.isawaitable(result):
+        await result
+
+
 def render_bom_tree(
     tree_data: List[dict],
     on_node_click: Callable[[str], None],
@@ -204,12 +212,12 @@ def render_bom_tree(
     _collect_parent_keys(tree_data)
 
     # ── 策略 A：select 事件（叶子节点 + 显式选中）──
-    def _handle_select(e: Any) -> None:
+    async def _handle_select(e: Any) -> None:
         val = e.args if hasattr(e, 'args') else getattr(e, 'value', None)
         if val is not None and val != '':
             node_id = str(val) if not isinstance(val, dict) else str(val.get('id', ''))
             if node_id:
-                on_node_click(node_id)
+                await _call_handler(on_node_click, node_id)
 
     tree.on('update:selected', _handle_select)
 
@@ -217,7 +225,7 @@ def render_bom_tree(
     # 预种已展开的 key，使 programmatic expand 的差集为空
     prev_expanded: List[str] = list(parent_keys)
 
-    def _handle_expand(e: Any) -> None:
+    async def _handle_expand(e: Any) -> None:
         nonlocal prev_expanded
         val = e.args if hasattr(e, 'args') else getattr(e, 'value', [])
         current: List[str] = val if isinstance(val, list) else []
@@ -227,7 +235,7 @@ def render_bom_tree(
         removed_keys = prev_set - current_set      # 用户折叠的
         prev_expanded = list(current)
         for node_id in new_keys | removed_keys:
-            on_node_click(node_id)
+            await _call_handler(on_node_click, node_id)
 
     tree.on('update:expanded', _handle_expand)
 

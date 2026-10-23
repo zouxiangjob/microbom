@@ -15,14 +15,18 @@ export const RELATION_TYPES = {
 export const RELATION_DATA_TYPES = {
   BOM: 'bom_relation',
   DRAWING: 'part_drawing_relation',
-  DOCUMENT: 'part_doc_relation'
+  DOCUMENT: 'part_doc_relation',
+  CATEGORY: 'category_relation',
+  CATEGORY_PART: 'category_part_relation'
 }
 
 // 关系类型数据名 → 展示文案（被引用页 / 零部件反查等统一使用）
 export const RELATION_LABELS = {
   bom_relation: 'BOM 装配关系',
   part_drawing_relation: '图档关联',
-  part_doc_relation: '文档关联'
+  part_doc_relation: '文档关联',
+  category_relation: '分类父子关系',
+  category_part_relation: '分类关联'
 }
 
 export function relationLabel(type) {
