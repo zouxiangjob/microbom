@@ -4,6 +4,8 @@ from app.api.deps import get_current_user
 # 核心修正：必须在这里显式导入对应的 router 变量
 from app.api.v1.auth import router as auth_router
 from app.api.v1.baselines import router as baselines_router
+from app.api.v1.category_attributes import router as category_attributes_router
+from app.api.v1.category_encoders import router as category_encoders_router
 from app.api.v1.file import router as file_router
 from app.api.v1.nodes import router as nodes_router
 from app.api.v1.relations import router as relations_router
@@ -24,3 +26,9 @@ api_router.include_router(relations_router, prefix="/relations", tags=["网状�
 
 # 挂载发布基线专用接口（需登录，独立基线表，与业务表解耦）
 api_router.include_router(baselines_router, prefix="/baselines", tags=["发布基线"], dependencies=[Depends(get_current_user)])
+
+# 挂载分类属性定义接口（需登录，独立专用表，与业务表解耦）
+api_router.include_router(category_attributes_router, prefix="/category-attributes", tags=["分类属性"], dependencies=[Depends(get_current_user)])
+
+# 挂载分类编码器接口（需登录，独立专用表，与业务表解耦）
+api_router.include_router(category_encoders_router, prefix="/category-encoders", tags=["分类编码器"], dependencies=[Depends(get_current_user)])

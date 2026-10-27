@@ -1,5 +1,5 @@
 """
-种子数据脚本：向数据库插入 100 条 PartModel + BOM 关系 + 图纸/文档，用于验证视图层。
+种子数据脚本：向数据库插入 100 条 PartModel + BOM 关系 + 图纸/文档 + 分类节点，用于验证视图层。
 运行方式：在 backend/ 目录下执行 python seed_data.py
 """
 import asyncio
@@ -14,10 +14,14 @@ from app.models.business import (
     PartModel,
     DocumentModel,
     DrawingModel,
+    CategoryNodeModel,
     BOMRelation,
     PartDocRelation,
     PartDrawingRelation,
+    CategoryPartRelationModel,
 )
+from app.models.category_attribute import CategoryAttributeDef
+from app.models.category_encoder import CategoryEncoder
 
 PART_CATEGORIES = {
     "WD": {"prefix": "WD", "names": ["蜗轮减速机", "行星减速机", "摆线减速机", "齿轮减速机", "谐波减速机"]},
@@ -30,6 +34,13 @@ PART_CATEGORIES = {
     "LJ": {"prefix": "LJ", "names": ["铝合金型材", "钢板", "铜管", "尼龙板", "不锈钢棒"]},
     "BZ": {"prefix": "BZ", "names": ["标准件套件A", "标准件套件B", "紧固件组合包", "密封件组合包", "电气件组合包"]},
     "ASM": {"prefix": "ASM", "names": ["主轴总成", "进给系统总成", "润滑系统总成", "冷却系统总成", "电气控制柜总成"]},
+}
+
+# 分类代码 → 中文分类名（用于分类节点的 properties.name）
+CATEGORY_NAMES = {
+    "WD": "减速机", "ZL": "轴类", "GJ": "紧固件", "MF": "密封件",
+    "DQ": "电机", "CJ": "传感器", "GL": "控制", "LJ": "材料",
+    "BZ": "标准件", "ASM": "总成",
 }
 
 DESIGNERS = ["张工", "李工", "王工", "赵工", "刘工", "陈工", "杨工", "黄工", "周工", "吴工"]
@@ -46,9 +57,26 @@ async def _count(session, model_cls) -> int:
 async def seed():
     async with AsyncSessionLocal() as session:
         print("清空旧数据...")
+        # 独立专用表（编码器/属性定义）引用分类 UUID，需先于分类节点清空，避免残留孤儿
+        await session.execute(delete(CategoryEncoder))
+        await session.execute(delete(CategoryAttributeDef))
         await session.execute(delete(RelationModel))
         await session.execute(delete(ObjectModel))
         await session.commit()
+
+        # ===== 第 0 步：创建分类节点（object_type="category"）=====
+        print("生成分类节点...")
+        category_nodes = {}
+        for cat_key in PART_CATEGORIES:
+            cat = CategoryNodeModel(
+                object_type="category",
+                properties={"name": CATEGORY_NAMES.get(cat_key, cat_key)},
+            )
+            session.add(cat)
+            category_nodes[cat_key] = cat
+
+        await session.flush()
+        print(f"  分类节点已 flush，共 {len(category_nodes)} 个")
 
         # ===== 第 1 步：创建 100 个零部件 =====
         print("生成 100 条零部件...")
@@ -79,6 +107,24 @@ async def seed():
 
         await session.flush()
         print(f"  零部件已 flush，共 {len(parts)} 条")
+
+        # ===== 第 1.5 步：创建分类关系边（分类节点 -> 零件，机制 B）=====
+        print("生成分类关系...")
+        cat_rel_count = 0
+        for part in parts:
+            cat_key = part.properties.get("category")
+            cat_node = category_nodes.get(cat_key)
+            if cat_node:
+                session.add(CategoryPartRelationModel(
+                    relation_type="category_part_relation",
+                    source_id=cat_node.id,
+                    target_id=part.id,
+                    properties={},
+                ))
+                cat_rel_count += 1
+
+        await session.flush()
+        print(f"  分类关系已 flush，共 {cat_rel_count} 条")
 
         # ===== 第 2 步：创建图档对象 =====
         print("生成图档数据...")
@@ -191,9 +237,11 @@ async def seed():
         await session.commit()
 
         print("\n种子数据插入完成！统计：")
+        print(f"   分类节点 (CategoryNode):  {await _count(session, CategoryNodeModel)}")
         print(f"   零部件 (PartModel):        {await _count(session, PartModel)}")
         print(f"   图档 (DrawingModel):       {await _count(session, DrawingModel)}")
         print(f"   文档 (DocumentModel):      {await _count(session, DocumentModel)}")
+        print(f"   分类关系 (CategoryPart):   {await _count(session, CategoryPartRelationModel)}")
         print(f"   BOM 关系 (BOMRelation):    {await _count(session, BOMRelation)}")
         print(f"   图纸关系 (PartDrawing):    {await _count(session, PartDrawingRelation)}")
         print(f"   文档关系 (PartDoc):        {await _count(session, PartDocRelation)}")

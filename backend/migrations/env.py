@@ -9,6 +9,8 @@ from alembic import context
 from app.models.base import Base
 import app.models.business  # noqa: F401
 import app.models.baseline  # noqa: F401
+import app.models.category_attribute  # noqa: F401
+import app.models.category_encoder  # noqa: F401
 import app.models.user  # noqa: F401
 from app.config import settings
 
