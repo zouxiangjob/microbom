@@ -1,7 +1,6 @@
 """
 装配体详情页：BOM 树 + 工程图纸 + 技术文档 + 下级子 BOM 表格。
 """
-import hashlib
 import os
 import uuid
 from typing import Any, Awaitable, Callable, Dict, List
@@ -16,6 +15,7 @@ from app.models.business import (
     PartModel, DocumentModel, DrawingModel,
     BOMRelation, PartDocRelation, PartDrawingRelation,
 )
+from app.services.file_service import store_file_contents
 from app.services.graph import AsyncGraphCrudEngine
 from app.views.base import render_header
 from app.views.components import (
@@ -288,8 +288,6 @@ async def _handle_upload(
             return
         part_id = uuid.UUID(part_id_str)
 
-        file_size = e.file.size()
-
         # 同一事务：创建节点 → 创建关系 → 物理落盘
         async with AsyncSessionLocal() as session:
             # 1. 创建目标节点（图纸或文档）
@@ -322,54 +320,15 @@ async def _handle_upload(
             session.add(rel)
             await session.flush()
 
-            # 3. 物理落盘 + 创建 FileModel 记录
-            os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-
-            file_extension = os.path.splitext(filename)[1].lower() if '.' in filename else ''
-            md5_hash = hashlib.md5(content).hexdigest()
-            unique_filename = f"{md5_hash}{file_extension}"
-            file_save_path = os.path.join(settings.UPLOAD_DIR, unique_filename)
-
-            # MD5 去重检查
-            existing = (await session.execute(
-                sa_select(FileModel).where(FileModel.stored_name == unique_filename)
-            )).scalar_one_or_none()
-
-            is_duplicate = False
-            if existing and os.path.exists(existing.absolute_path):
-                file_save_path = existing.absolute_path  # 物理文件复用
-                # stored_name 有 UNIQUE 约束，去重时追加对象 ID 后缀避免冲突
-                unique_filename = f"{md5_hash}_{obj.id.hex[:8]}{file_extension}"
-                is_duplicate = True
-            else:
-                with open(file_save_path, "wb") as f:
-                    f.write(content)
-
-            # 创建 FileModel 记录
-            db_file = FileModel(
+            # 3. 复用 file_service 的落盘 + FileModel + 属性回写逻辑（含 MD5 去重与旧文件清理）
+            await store_file_contents(
+                db=session,
                 object_id=obj.id,
+                model_cls=model_class,
                 original_name=filename,
-                stored_name=unique_filename,
-                file_size=file_size,
-                mime_type=mime_type,
-                absolute_path=file_save_path,
+                content_type=mime_type,
+                contents=content,
             )
-            session.add(db_file)
-
-            # 更新关联节点属性
-            db_obj = await session.get(ObjectModel, obj.id)
-            if db_obj:
-                props = dict(db_obj.properties) if db_obj.properties else {}
-                props["file_status"] = "ready"
-                props["status"] = "ready"
-                props["is_uploaded"] = True
-                props["md5"] = md5_hash
-                props["is_hit_cache"] = is_duplicate
-                db_obj.properties = props
-                session.add(db_obj)
-
-            # 同一事务提交
-            await session.commit()
 
         # 4. 关闭对话框并定向刷新右侧面板（避免全页重载后跳回总节点）
         dialog.close()

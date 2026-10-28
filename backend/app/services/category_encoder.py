@@ -7,7 +7,7 @@ import time
 import uuid
 from typing import Any, Dict, Optional, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.category_encoder import CategoryEncoder
@@ -145,10 +145,7 @@ async def generate_code(db: AsyncSession, category_id: uuid.UUID) -> str:
         raise ValueError(f"分类 [{category_id}] 未配置编码器")
 
     if enc.encoder_type == "sequence":
-        code, next_seq = generate_sequence_code(
-            enc.prefix, enc.suffix, enc.start_seq, enc.end_seq, enc.seq_length, enc.current_seq
-        )
-        enc.current_seq = next_seq
+        code = await _next_sequence_code_atomic(db, enc)
     else:
         code = execute_script(enc.encoder_script, enc.latest_code)
 
@@ -156,3 +153,29 @@ async def generate_code(db: AsyncSession, category_id: uuid.UUID) -> str:
     await db.commit()
     await db.refresh(enc)
     return code
+
+
+async def _next_sequence_code_atomic(db: AsyncSession, enc: CategoryEncoder) -> str:
+    """原子递增流水号并生成编码，避免并发读-改-写导致的重复发号。
+
+    将「读当前流水 + 加一」合并为单条 UPDATE ... RETURNING 原子写：多个并发请求在
+    SQLite 单写者串行化下各自拿到唯一的流水号，而非先 SELECT 再 UPDATE 的竞态窗口。
+    """
+    start_seq = enc.start_seq
+    # COALESCE(current_seq, start_seq - 1) + 1：首号从 start_seq 开始，之后每次 +1
+    stmt = (
+        update(CategoryEncoder)
+        .where(CategoryEncoder.id == enc.id)
+        .values(current_seq=func.coalesce(CategoryEncoder.current_seq, start_seq - 1) + 1)
+        .returning(CategoryEncoder.current_seq)
+    )
+    next_seq = (await db.execute(stmt)).scalar_one()
+
+    end_seq = enc.end_seq
+    if end_seq is not None and next_seq > end_seq:
+        # 超出终止流水：回滚本次递增，保持原流水不变（先缓存 end_seq，避免 rollback 后访问已过期属性）
+        await db.rollback()
+        raise ValueError(f"流水号已用尽：下一号 {next_seq} 超过终止流水 {end_seq}")
+
+    seq_str = str(next_seq).zfill(enc.seq_length or 0)
+    return f"{enc.prefix or ''}{seq_str}{enc.suffix or ''}"

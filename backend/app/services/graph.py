@@ -46,6 +46,18 @@ REQUIRED_FIELDS: Dict[str, List[str]] = {
     "category": ["name"],
 }
 
+# 关系边端点类型约束：relation_type（多态标识）-> (允许的 source object_type 集合, 允许的 target object_type 集合)
+# 用于在写入关系时校验两端节点的类型是否合法，避免出现 drawing -> document 的 BOM 边等语义错误。
+RELATION_ENDPOINT_RULES: Dict[str, tuple[set, set]] = {
+    "bom_relation": ({"part"}, {"part"}),
+    "part_drawing_relation": ({"part"}, {"drawing"}),
+    "part_doc_relation": ({"part"}, {"document"}),
+    "doc_attachment_relation": ({"document"}, {"attachment"}),
+    "drawing_attachment_relation": ({"drawing"}, {"attachment"}),
+    "category_relation": ({"category"}, {"category"}),
+    "category_part_relation": ({"category"}, {"part"}),
+}
+
 
 class AsyncGraphCrudEngine:
     """通用异步图谱业务引擎：基于"万物皆对象"模型提供节点与关系的 CRUD 及图遍历能力。"""
@@ -117,6 +129,48 @@ class AsyncGraphCrudEngine:
             value = (properties or {}).get(field)
             if value is None or (isinstance(value, str) and not value.strip()):
                 return f"字段 [{field}] 为必填关键字段，不能为空"
+        return None
+
+    @staticmethod
+    def validate_relation_endpoints(relation_type: str, source_type: str, target_type: str) -> Optional[str]:
+        """校验关系边两端节点的对象类型是否符合该关系类型的语义约束；通过返回 None。"""
+        rule = RELATION_ENDPOINT_RULES.get(relation_type)
+        if not rule:
+            return f"未注册的关系类型 [{relation_type}]，无法校验端点类型"
+        allowed_source, allowed_target = rule
+        if source_type not in allowed_source or target_type not in allowed_target:
+            return f"关系类型 [{relation_type}] 不允许 {source_type} -> {target_type} 的连接"
+        return None
+
+    @staticmethod
+    async def find_part_by_number(
+            db: AsyncSession,
+            part_number: str,
+            exclude_id: Optional[uuid.UUID] = None,
+    ) -> Optional[ObjectModel]:
+        """按 part_number 精确查找零件；命中重复项时返回第一个（更新时用 exclude_id 排除自身）。"""
+        from app.models.business import PartModel
+        stmt = select(PartModel).where(
+            PartModel.properties["part_number"].as_string() == part_number
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(PartModel.id != exclude_id)
+        result = await db.execute(stmt)
+        return result.scalars().first()
+
+    @staticmethod
+    async def ensure_unique_part_number(
+            db: AsyncSession,
+            properties: Dict[str, Any],
+            exclude_id: Optional[uuid.UUID] = None,
+    ) -> Optional[str]:
+        """校验 part_number 唯一性（应用层）；重复返回错误信息，通过返回 None。"""
+        part_number = (properties or {}).get("part_number")
+        if not part_number:
+            return None  # 必填性由 validate_required_fields 单独校验
+        existing = await AsyncGraphCrudEngine.find_part_by_number(db, part_number, exclude_id)
+        if existing:
+            return f"零件编码 [{part_number}] 已存在，不允许重复"
         return None
 
     @staticmethod
@@ -394,14 +448,27 @@ class AsyncGraphCrudEngine:
         created_node_ids = []
         created_edge_ids = []
 
-        # 内存缓存，用于快速校验本次批次内的节点是否存在
+        # 内存缓存：本次批次内的节点 ID 与对象类型，用于快速校验连线端点和类型
         local_node_id_set = set()
+        local_node_types: Dict[str, str] = {}
+        # 本次批次内的零件编码集合，用于去重校验
+        local_part_numbers: set[str] = set()
 
         try:
             # 第一阶段：批量实例化并写入节点
             for node_item in batch_data.nodes:
                 if node_item.object_type not in node_mappers:
                     raise ValueError(f"批量终止：未注册的节点类型 '{node_item.object_type}'")
+
+                # 零件编码唯一性校验（批次内 + 数据库）
+                if node_item.object_type == "part":
+                    pn = (node_item.properties or {}).get("part_number")
+                    if pn:
+                        if pn in local_part_numbers:
+                            raise ValueError(f"批量终止：零件编码 [{pn}] 在本次批次内重复")
+                        if await AsyncGraphCrudEngine.find_part_by_number(db, pn):
+                            raise ValueError(f"批量终止：零件编码 [{pn}] 已存在，不允许重复")
+                        local_part_numbers.add(pn)
 
                 model_cls = node_mappers[node_item.object_type]
 
@@ -415,21 +482,36 @@ class AsyncGraphCrudEngine:
                 db.add(new_node)
                 created_node_ids.append(new_node.id)
                 local_node_id_set.add(str(new_node.id))
+                local_node_types[str(new_node.id)] = node_item.object_type
 
             # 第二阶段：批量建立关系
             for edge_item in batch_data.relations:
                 if edge_item.relation_type not in edge_mappers:
                     raise ValueError(f"批量终止：未注册的关系边类型 '{edge_item.relation_type}'")
 
-                # 校验连线两端是否合法（在本次新建列表中，或已存在于数据库）
+                # 校验连线两端是否合法，并解析两端对象类型（用于端点类型约束）
+                resolved_types: Dict[str, str] = {}
                 for n_id, role in [(edge_item.source_id, "起点"), (edge_item.target_id, "终点")]:
-                    if str(n_id) not in local_node_id_set:
+                    key = str(n_id)
+                    if key in local_node_types:
+                        resolved_types[key] = local_node_types[key]
+                    else:
                         exists_node = await db.get(ObjectModel, n_id)
                         if not exists_node:
                             raise ValueError(
                                 f"网状拓扑中断：连线【{edge_item.relation_type}】指定的{role} ID [{n_id}] 在系统中不存在")
+                        resolved_types[key] = exists_node.object_type
 
                 edge_cls = edge_mappers[edge_item.relation_type]
+                edge_identity = edge_cls.__mapper_args__["polymorphic_identity"]
+                endpoint_err = AsyncGraphCrudEngine.validate_relation_endpoints(
+                    edge_identity,
+                    resolved_types[str(edge_item.source_id)],
+                    resolved_types[str(edge_item.target_id)],
+                )
+                if endpoint_err:
+                    raise ValueError(f"批量终止：{endpoint_err}")
+
                 new_edge = edge_cls(
                     id=uuid.uuid4(),
                     source_id=edge_item.source_id,
@@ -470,6 +552,14 @@ class AsyncGraphCrudEngine:
                 if not node_obj:
                     raise ValueError(f"修改失败：目标节点 [{node_item.id}] 不存在或类型不是 '{node_item.object_type}'")
 
+                # 零件编码唯一性校验（改编码时排除自身）
+                if node_item.object_type == "part" and "part_number" in (node_item.properties or {}):
+                    dup_err = await AsyncGraphCrudEngine.ensure_unique_part_number(
+                        db, node_item.properties, exclude_id=node_obj.id
+                    )
+                    if dup_err:
+                        raise ValueError(f"批量修改终止：{dup_err}")
+
                 # 增量合并属性字典
                 current_props = dict(node_obj.properties) if node_obj.properties else {}
                 current_props.update(node_item.properties)
@@ -503,6 +593,17 @@ class AsyncGraphCrudEngine:
                         raise ValueError(f"拓扑重定向失败：新设定的终点节点 [{edge_item.target_id}] 在系统中不存在")
                     edge_obj.target_id = edge_item.target_id
 
+                # 场景 A+：重定向后校验两端对象类型是否符合该关系类型的语义约束
+                src_node = await db.get(ObjectModel, edge_obj.source_id)
+                tgt_node = await db.get(ObjectModel, edge_obj.target_id)
+                if not src_node or not tgt_node:
+                    raise ValueError("拓扑重定向失败：起点或终点节点不存在")
+                endpoint_err = AsyncGraphCrudEngine.validate_relation_endpoints(
+                    edge_obj.relation_type, src_node.object_type, tgt_node.object_type
+                )
+                if endpoint_err:
+                    raise ValueError(f"批量修改终止：{endpoint_err}")
+
                 # 场景 B：增量更新关系边属性
                 if edge_item.properties:
                     current_edge_props = dict(edge_obj.properties) if edge_obj.properties else {}
@@ -531,17 +632,27 @@ class AsyncGraphCrudEngine:
         """全量重写子图拓扑（清除后重建）。
 
         1. 增量更新或创建传入的子节点属性。
-        2. 清空以 root_id 为源头发出的所有旧关系边。
+        2. 清空以 root_id 为源头发出的、且属于本次重写类型的旧关系边（不误删其它类型）。
         3. 写入全新关系边，任一步失败则整体回滚，旧结构保留。
         """
         purged_count = 0
         inserted_count = 0
-        local_known_node_ids = {str(batch_data.root_id)}
+        local_node_types: Dict[str, str] = {}
 
         try:
+            # 步骤 0：解析本次重写涉及的关系类型（归一化为多态标识，兼容 "bom"/"bom_relation" 别名）
+            rewrite_identities: set[str] = set()
+            for edge_item in batch_data.relations:
+                if edge_item.relation_type not in edge_mappers:
+                    raise ValueError(f"重写终止：未注册的关系连线类型 '{edge_item.relation_type}'")
+                rewrite_identities.add(edge_mappers[edge_item.relation_type].__mapper_args__["polymorphic_identity"])
+            if not rewrite_identities:
+                # 未声明任何关系类型时，按该接口的主要用途（BOM 拓扑）处理
+                from app.models.business import BOMRelation
+                rewrite_identities = {BOMRelation.__mapper_args__["polymorphic_identity"]}
+
             # 步骤 1：增量更新或创建传入的子节点
             for node_item in batch_data.nodes:
-                local_known_node_ids.add(str(node_item.id))
                 if node_item.object_type not in node_mappers:
                     raise ValueError(f"重写终止：未注册的节点类型 '{node_item.object_type}'")
 
@@ -549,18 +660,34 @@ class AsyncGraphCrudEngine:
                 node_obj = await db.get(model_cls, node_item.id)
 
                 if node_obj:
-                    # 节点已存在：增量合并属性
+                    # 节点已存在：增量合并属性，并校验零件编码唯一性（排除自身）
+                    if node_item.object_type == "part" and "part_number" in (node_item.properties or {}):
+                        dup_err = await AsyncGraphCrudEngine.ensure_unique_part_number(
+                            db, node_item.properties, exclude_id=node_obj.id
+                        )
+                        if dup_err:
+                            raise ValueError(f"重写终止：{dup_err}")
                     current_props = dict(node_obj.properties) if node_obj.properties else {}
                     current_props.update(node_item.properties)
                     node_obj.properties = current_props
                 else:
-                    # 节点不存在：创建
+                    # 节点不存在：创建，并校验零件编码唯一性
+                    if node_item.object_type == "part":
+                        dup_err = await AsyncGraphCrudEngine.ensure_unique_part_number(
+                            db, node_item.properties
+                        )
+                        if dup_err:
+                            raise ValueError(f"重写终止：{dup_err}")
                     node_obj = model_cls(id=node_item.id, properties=node_item.properties)
 
                 db.add(node_obj)
+                local_node_types[str(node_item.id)] = node_item.object_type
 
-            # 步骤 2：清空以 root_id 为起点发出的所有旧关系边
-            old_edges_stmt = select(RelationModel).where(RelationModel.source_id == batch_data.root_id)
+            # 步骤 2：清空以 root_id 为起点发出的、属于本次重写类型的旧关系边
+            old_edges_stmt = select(RelationModel).where(
+                RelationModel.source_id == batch_data.root_id,
+                RelationModel.relation_type.in_(rewrite_identities),
+            )
             old_edges_res = await db.execute(old_edges_stmt)
             old_edges_list = old_edges_res.scalars().all()
 
@@ -572,17 +699,29 @@ class AsyncGraphCrudEngine:
             await db.flush()
 
             # 步骤 3：写入全新关系边
-            for edge_item in batch_data.relations:
-                if edge_item.relation_type not in edge_mappers:
-                    raise ValueError(f"重写终止：未注册的关系连线类型 '{edge_item.relation_type}'")
+            root_node = await db.get(ObjectModel, batch_data.root_id)
+            if not root_node:
+                raise ValueError(f"重写失败：根节点 [{batch_data.root_id}] 不存在")
 
-                # 校验终点节点存在（本次提交或已存在于数据库）
-                if str(edge_item.target_id) not in local_known_node_ids:
+            for edge_item in batch_data.relations:
+                # 解析终点节点类型并校验存在性
+                target_key = str(edge_item.target_id)
+                if target_key in local_node_types:
+                    target_type = local_node_types[target_key]
+                else:
                     exists_node = await db.get(ObjectModel, edge_item.target_id)
                     if not exists_node:
                         raise ValueError(f"重写失败：新网络中指定的终点节点 [{edge_item.target_id}] 不存在")
+                    target_type = exists_node.object_type
 
                 edge_cls = edge_mappers[edge_item.relation_type]
+                edge_identity = edge_cls.__mapper_args__["polymorphic_identity"]
+                endpoint_err = AsyncGraphCrudEngine.validate_relation_endpoints(
+                    edge_identity, root_node.object_type, target_type
+                )
+                if endpoint_err:
+                    raise ValueError(f"重写终止：{endpoint_err}")
+
                 new_edge = edge_cls(
                     id=uuid.uuid4(),
                     source_id=batch_data.root_id,  # 起点固定为当前重写的根节点

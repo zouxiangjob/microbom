@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from app.database.session import get_db
 from app.api.deps import require_roles
 from app.services.graph import AsyncGraphCrudEngine
-from app.services.status import STATUS_DRAFT, is_valid_status, validate_transition
+from app.services.status import STATUS_DRAFT, ALL_STATUSES, is_valid_status, validate_transition
 from app.models.business import PartModel, DocumentModel, DrawingModel, AttachmentModel, CategoryNodeModel
 
 router = APIRouter()
@@ -75,6 +75,12 @@ async def create_node(
     elif not is_valid_status(status_value):
         raise HTTPException(status_code=422, detail=f"非法状态值: {status_value}")
 
+    # 零件编码唯一性校验（应用层）
+    if object_type == "part":
+        dup_err = await AsyncGraphCrudEngine.ensure_unique_part_number(db, props)
+        if dup_err:
+            raise HTTPException(status_code=422, detail=dup_err)
+
     model_cls = NODE_TYPE_MAPPER[object_type]
     new_node = model_cls(properties=props)
     return await AsyncGraphCrudEngine.create_node(db, new_node)
@@ -130,11 +136,22 @@ async def update_node_properties(
     if "status" in payload.properties:
         new_status = payload.properties["status"]
         old_status = (node.properties or {}).get("status", STATUS_DRAFT)
+        # 兼容历史脏数据（如曾被写入 "ready"）：未知旧状态一律视为 draft 起点
+        if old_status not in ALL_STATUSES:
+            old_status = STATUS_DRAFT
         if not validate_transition(old_status, new_status):
             raise HTTPException(
                 status_code=422,
                 detail=f"非法状态转移: {old_status} -> {new_status}",
             )
+
+    # 零件编码唯一性校验（改编码时排除自身）
+    if object_type == "part" and "part_number" in payload.properties:
+        dup_err = await AsyncGraphCrudEngine.ensure_unique_part_number(
+            db, payload.properties, exclude_id=node.id
+        )
+        if dup_err:
+            raise HTTPException(status_code=422, detail=dup_err)
 
     return await AsyncGraphCrudEngine.update_node_properties(db, node, payload.properties)
 

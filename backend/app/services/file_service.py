@@ -1,7 +1,7 @@
 import os
 import hashlib
 from uuid import UUID as PyUUID
-from typing import Type
+from typing import Optional, Type
 from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +19,29 @@ async def save_physical_file(
         object_id: PyUUID,
         model_cls: Type[ObjectModel]
 ) -> FileModel:
-    """保存物理文件并登记元数据，支持基于 MD5 的文件去重。
+    """FastAPI 上传入口：读取 UploadFile 内容后，委托给底层落盘/记账逻辑。"""
+    original_name = file.filename or "unknown"
+    contents = await file.read()
+    return await store_file_contents(
+        db,
+        object_id=object_id,
+        model_cls=model_cls,
+        original_name=original_name,
+        content_type=file.content_type,
+        contents=contents,
+    )
+
+
+async def store_file_contents(
+        db: AsyncSession,
+        *,
+        object_id: PyUUID,
+        model_cls: Type[ObjectModel],
+        original_name: str,
+        content_type: Optional[str],
+        contents: bytes,
+) -> FileModel:
+    """保存物理文件并登记元数据（与上传通道解耦，供 API 与 NiceGUI 视图层复用）。
 
     流程：
     1. 计算文件 MD5，若已有相同 MD5 则复用物理文件。
@@ -29,13 +51,9 @@ async def save_physical_file(
     # 确保上传目录存在
     os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-    # 步骤 1：读取内容并计算 MD5
-    original_name = file.filename or "unknown"
+    # 步骤 1：计算 MD5
     file_extension = os.path.splitext(original_name)[1].lower()
-
-    contents = await file.read()
     file_size = len(contents)
-
     md5_hash = hashlib.md5(contents).hexdigest()
 
     # 物理文件的唯一存储名由 MD5 + 扩展名构成
@@ -81,7 +99,7 @@ async def save_physical_file(
             original_name=original_name,
             stored_name=unique_filename,
             file_size=file_size,
-            mime_type=file.content_type or "application/octet-stream",
+            mime_type=content_type or "application/octet-stream",
             absolute_path=file_save_path
         )
         db.add(db_file)
@@ -89,7 +107,6 @@ async def save_physical_file(
         # 3.4 更新关联节点的上传状态
         props = dict(obj_node.properties) if obj_node.properties else {}
         props["file_status"] = "ready"
-        props["status"] = "ready"
         props["is_uploaded"] = True
         props["md5"] = md5_hash
         props["is_hit_cache"] = is_duplicate

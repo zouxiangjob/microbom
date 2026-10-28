@@ -93,12 +93,22 @@ async def create_relation(
     if not source_node or not target_node:
         raise HTTPException(status_code=404, detail="无法建立关系：指定的起点或终点节点在数据库中不存在")
 
+    model_cls = RELATION_TYPE_MAPPER[relation_type]
+
+    # 端点类型约束：校验 source -> target 的对象类型是否符合该关系类型的语义
+    endpoint_err = AsyncGraphCrudEngine.validate_relation_endpoints(
+        model_cls.__mapper_args__["polymorphic_identity"],
+        source_node.object_type,
+        target_node.object_type,
+    )
+    if endpoint_err:
+        raise HTTPException(status_code=422, detail=endpoint_err)
+
     # BOM 环检测：source->target 若会让 target 成为自己的祖先，则拒绝
     if relation_type in ("bom", "bom_relation"):
         if await AsyncGraphCrudEngine.has_bom_cycle(db, payload.source_id, payload.target_id):
             raise HTTPException(status_code=422, detail="BOM 环检测失败：该关系会形成循环引用")
 
-    model_cls = RELATION_TYPE_MAPPER[relation_type]
     new_edge = model_cls(
         source_id=payload.source_id,
         target_id=payload.target_id,
