@@ -61,7 +61,10 @@ def _seq_to_version(seq: int) -> str:
 async def next_release_version(db: AsyncSession, root_id: uuid.UUID) -> str:
     """计算某根总成的下一个发布版本号：取其历史基线最大版本 + 1。"""
     result = await db.execute(
-        select(Baseline.release_version).where(Baseline.root_object_id == root_id)
+        select(Baseline.release_version).where(
+            Baseline.root_object_id == root_id,
+            Baseline.is_deleted == False,
+        )
     )
     max_seq = max((_version_to_seq(row[0]) for row in result.all()), default=0)
     return _seq_to_version(max_seq + 1)
@@ -159,6 +162,7 @@ async def _collect_snapshot_edges(db: AsyncSession, root_id: uuid.UUID) -> List[
     ).where(
         RelationModel.source_id == root_id,
         RelationModel.relation_type.in_(_SNAPSHOT_RELATION_TYPES),
+        RelationModel.is_deleted == False,
     )
 
     cte = anchor.cte(name="baseline_snapshot_cte", recursive=True)
@@ -173,6 +177,7 @@ async def _collect_snapshot_edges(db: AsyncSession, root_id: uuid.UUID) -> List[
     ).join(cte, RelationModel.source_id == cte.c.target_id).where(
         RelationModel.relation_type.in_(_SNAPSHOT_RELATION_TYPES),
         cte.c.depth < _MAX_DEPTH,
+        RelationModel.is_deleted == False,
     )
 
     full = cte.union_all(recursive)
@@ -185,7 +190,9 @@ async def _collect_snapshot_edges(db: AsyncSession, root_id: uuid.UUID) -> List[
         full.c.depth,
         ObjectModel.object_type,
         ObjectModel.properties.label("node_properties"),
-    ).join(ObjectModel, ObjectModel.id == full.c.target_id)
+    ).join(ObjectModel, ObjectModel.id == full.c.target_id).where(
+        ObjectModel.is_deleted == False,
+    )
 
     result = await db.execute(stmt)
     return [dict(row) for row in result.mappings().all()]
@@ -197,7 +204,7 @@ async def _collect_snapshot_edges(db: AsyncSession, root_id: uuid.UUID) -> List[
 
 async def list_baselines(db: AsyncSession, root_id: Optional[uuid.UUID] = None) -> List[Dict[str, Any]]:
     """按时间倒序列出基线，可选按根总成过滤，附带条目数统计。"""
-    stmt = select(Baseline).order_by(Baseline.created_at.desc())
+    stmt = select(Baseline).where(Baseline.is_deleted == False).order_by(Baseline.created_at.desc())
     if root_id:
         stmt = stmt.where(Baseline.root_object_id == root_id)
     result = await db.execute(stmt)
@@ -312,11 +319,11 @@ async def diff_baselines(
 async def _load_items(db: AsyncSession, baseline_id: uuid.UUID) -> Optional[Dict[str, Any]]:
     """加载基线头 + 按深度排序的冻结条目，转成规整字典。"""
     baseline = await db.get(Baseline, baseline_id)
-    if not baseline:
+    if not baseline or baseline.is_deleted:
         return None
     stmt = (
         select(BaselineItem)
-        .where(BaselineItem.baseline_id == baseline_id)
+        .where(BaselineItem.baseline_id == baseline_id, BaselineItem.is_deleted == False)
         .order_by(BaselineItem.depth)
     )
     result = await db.execute(stmt)

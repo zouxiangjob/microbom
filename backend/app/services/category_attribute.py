@@ -57,7 +57,7 @@ async def list_attr_defs(db: AsyncSession, category_id: uuid.UUID) -> List[Categ
     """按分类查询其全部属性定义，按 sort_order 排序。"""
     stmt = (
         select(CategoryAttributeDef)
-        .where(CategoryAttributeDef.category_id == category_id)
+        .where(CategoryAttributeDef.category_id == category_id, CategoryAttributeDef.is_deleted == False)
         .order_by(CategoryAttributeDef.sort_order, CategoryAttributeDef.created_at)
     )
     result = await db.execute(stmt)
@@ -65,8 +65,11 @@ async def list_attr_defs(db: AsyncSession, category_id: uuid.UUID) -> List[Categ
 
 
 async def get_attr_def(db: AsyncSession, attr_id: uuid.UUID) -> Optional[CategoryAttributeDef]:
-    """按 ID 查询单条属性定义。"""
-    return await db.get(CategoryAttributeDef, attr_id)
+    """按 ID 查询单条属性定义（软删视为不存在）。"""
+    defn = await db.get(CategoryAttributeDef, attr_id)
+    if defn is None or defn.is_deleted:
+        return None
+    return defn
 
 
 async def update_attr_def(
@@ -96,11 +99,11 @@ async def update_attr_def(
 
 
 async def delete_attr_def(db: AsyncSession, attr_id: uuid.UUID) -> bool:
-    """删除单条属性定义，成功返回 True，不存在返回 False。"""
+    """软删除单条属性定义，成功返回 True，不存在或已删除返回 False。"""
     defn = await db.get(CategoryAttributeDef, attr_id)
-    if not defn:
+    if not defn or defn.is_deleted:
         return False
-    await db.delete(defn)
+    defn.is_deleted = True
     await db.commit()
     return True
 
@@ -115,7 +118,7 @@ async def build_part_attribute_schema(db: AsyncSession, part_id: uuid.UUID) -> O
     from app.services.graph import AsyncGraphCrudEngine
 
     part = await db.get(ObjectModel, part_id)
-    if not isinstance(part, PartModel):
+    if not isinstance(part, PartModel) or part.is_deleted:
         return None
 
     props = part.properties or {}
@@ -129,7 +132,7 @@ async def build_part_attribute_schema(db: AsyncSession, part_id: uuid.UUID) -> O
     category_name = ""
     if category_id:
         category = await db.get(ObjectModel, category_id)
-        if category:
+        if category and not category.is_deleted:
             category_name = (category.properties or {}).get("name", "")
 
     defs = await list_attr_defs(db, category_id) if category_id else []

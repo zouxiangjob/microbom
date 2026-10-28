@@ -25,8 +25,8 @@ Vue 3 + Vite frontend for a BOM / PDM management system (product structure, part
   - `src/api/files.js` — 文件上传/预览/下载/元数据（`uploadFile` / `fileUrl` / `getFileMeta`），文档与图档的物理文件走这里。
   - `src/api/category-attributes.js` — 分类属性定义 CRUD + 零件属性清单聚合（`listCategoryAttributes` / `getPartAttributeSchema` / `createCategoryAttribute` / `updateCategoryAttribute` / `deleteCategoryAttribute`）。
   - `src/api/mapping.js` — 前后端字段映射契约与统一工具（`nodeToRow` / `documentToRow` / `drawingToRow` / `nodeTitle` / `nodeDisplayName` / `nodeLabel` / `statusTagType`）。
-  - `src/utils/tree.js` — 把后端平铺树转成 el-tree 嵌套结构（`flatToTree` / `flatToReverseTree`）。注意：当前 `Bom.vue` / `WhereUsed.vue` 等仍各自手写了树构建逻辑，尚未复用这里的工具。
-- **关系类型有两套字符串，别混用。** `relations.js` 的 `RELATION_TYPES` 是 URL 段（如 `BOM: 'bom'`），用于请求路径；而数据里 `edge.relation_type` 是下划线全名（`bom_relation` / `part_drawing_relation` / `part_doc_relation`），用于过滤与展示。DRAWING、DOCUMENT 两种恰好 URL 段 == 数据名，唯独 BOM 不一致（`'bom'` vs `'bom_relation'`），`Bom.vue` 里硬编码了 `'bom_relation'`。
+  - `src/utils/tree.js` — 把后端平铺树转成 el-tree 嵌套结构（`flatToTree` / `flatToReverseTree`）。`Bom.vue` / `WhereUsed.vue` / `ObjectParts.vue` 已统一复用此工具。
+- **关系类型有两套字符串，别混用。** `relations.js` 的 `RELATION_TYPES` 是 URL 段（如 `BOM: 'bom'`），用于请求路径；而数据里 `edge.relation_type` 是下划线全名（`bom_relation` / `part_drawing_relation` / `part_doc_relation`），用于过滤与展示——组件统一用 `RELATION_DATA_TYPES` 常量，不硬编码字符串。
 - **Vite proxy 已配置** — `vite.config.js` 把 `/api` 代理到 `http://127.0.0.1:8000`（`changeOrigin: true`），开发环境前端 `baseURL` 走相对路径即可；生产构建用 `VITE_API_BASE` 指向后端完整地址。
 - **Element Plus** is registered globally (no on-demand import); icons are imported explicitly from `@element-plus/icons-vue` in each component that uses them.
 - **Styling** — `src/styles/theme.css` is the single source of truth for design tokens: a "drafting table / refined blueprint" theme — warm paper (`--paper`), ink-blue text (`--ink-*`), one cyan accent (`--blue`), hairline rules (`--line`). Bahnschrift (DIN) for headers, Segoe UI for body, monospace (`--font-data`) for codes/versions. Element Plus primary is remapped to the cyan accent.

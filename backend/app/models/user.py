@@ -8,10 +8,10 @@ from uuid import UUID as PyUUID
 from sqlalchemy import Boolean, DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, SoftDeleteMixin
 
 
-class UserModel(Base):
+class UserModel(Base, SoftDeleteMixin):
     """系统登录用户：用户名 + 密码哈希 + 角色。"""
     __tablename__ = "users"
 

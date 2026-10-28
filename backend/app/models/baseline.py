@@ -16,10 +16,10 @@ from uuid import UUID as PyUUID
 from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base
+from app.models.base import Base, SoftDeleteMixin
 
 
-class Baseline(Base):
+class Baseline(Base, SoftDeleteMixin):
     """发布基线主表：记录一次发布动作的元信息。"""
     __tablename__ = "baselines"
 
@@ -40,7 +40,7 @@ class Baseline(Base):
     )
 
 
-class BaselineItem(Base):
+class BaselineItem(Base, SoftDeleteMixin):
     """基线冻结条目表：逐条冻结 BOM 树中的节点及其父子结构关系。"""
     __tablename__ = "baseline_items"
 

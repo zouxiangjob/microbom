@@ -14,10 +14,10 @@ from typing import Any, Optional
 from sqlalchemy import JSON, Boolean, DateTime, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, SoftDeleteMixin
 
 
-class CategoryAttributeDef(Base):
+class CategoryAttributeDef(Base, SoftDeleteMixin):
     """分类属性定义：描述某分类下零部件的属性模板（键名/显示名/类型/约束）。"""
     __tablename__ = "category_attribute_defs"
 

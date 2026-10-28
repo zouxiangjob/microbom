@@ -81,7 +81,10 @@ def execute_script(script: str, latest_code: Optional[str]) -> str:
 
 async def get_encoder_by_category(db: AsyncSession, category_id: uuid.UUID) -> Optional[CategoryEncoder]:
     """按分类节点 UUID 查询其编码器。"""
-    stmt = select(CategoryEncoder).where(CategoryEncoder.category_id == category_id)
+    stmt = select(CategoryEncoder).where(
+        CategoryEncoder.category_id == category_id,
+        CategoryEncoder.is_deleted == False,
+    )
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
@@ -129,11 +132,11 @@ async def update_encoder(db: AsyncSession, category_id: uuid.UUID, updates: Dict
 
 
 async def delete_encoder(db: AsyncSession, category_id: uuid.UUID) -> bool:
-    """删除编码器，成功返回 True，不存在返回 False。"""
+    """软删除编码器，成功返回 True，不存在返回 False。"""
     enc = await get_encoder_by_category(db, category_id)
     if not enc:
         return False
-    await db.delete(enc)
+    enc.is_deleted = True
     await db.commit()
     return True
 

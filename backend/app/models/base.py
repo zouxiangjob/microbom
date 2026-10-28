@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from uuid import UUID as PyUUID
 from typing import Any, Dict
-from sqlalchemy import String, ForeignKey, DateTime, func, JSON, Integer
+from sqlalchemy import Boolean, String, ForeignKey, DateTime, func, JSON, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship, DeclarativeBase
 
 
@@ -11,11 +11,16 @@ class Base(DeclarativeBase):
     pass
 
 
+class SoftDeleteMixin:
+    """软删除通用标记：is_deleted=True 表示已逻辑删除。所有读查询须过滤 is_deleted == False。"""
+    is_deleted: Mapped[bool] = mapped_column("is_deleted", Boolean, default=False, nullable=False)
+
+
 # ==============================================================================
 # 1. 对象基表
 # ==============================================================================
 
-class ObjectModel(Base):
+class ObjectModel(Base, SoftDeleteMixin):
     """对象基表：所有业务节点的公共父表，通过 object_type 区分具体类型。"""
     __tablename__ = "objects"
 
@@ -42,7 +47,7 @@ class ObjectModel(Base):
 # ==============================================================================
 # 2. 文件表
 # ==============================================================================
-class FileModel(Base):
+class FileModel(Base, SoftDeleteMixin):
     """文件表：记录物理文件元数据，主键复用 objects.id（与对象一对一）。"""
     __tablename__ = "files"
 
@@ -61,7 +66,7 @@ class FileModel(Base):
 # ==============================================================================
 # 3. 关系表
 # ==============================================================================
-class RelationModel(Base):
+class RelationModel(Base, SoftDeleteMixin):
     """关系表：表达节点之间的有向连接（source_id -> target_id）。"""
     __tablename__ = "relations"
 

@@ -76,6 +76,8 @@ class AsyncGraphCrudEngine:
     async def get_node_by_id(db: AsyncSession, model_cls: Type[T_Node], node_id: uuid.UUID) -> Optional[T_Node]:
         """按业务类和 UUID 查询节点，类型不匹配时返回 None。"""
         node = await db.get(ObjectModel, node_id)
+        if node is None or node.is_deleted:
+            return None
         if isinstance(node, model_cls):
             return node
         return None
@@ -84,7 +86,7 @@ class AsyncGraphCrudEngine:
     async def query_nodes_by_type(db: AsyncSession, model_cls: Type[T_Node], limit: int = 100, offset: int = 0) -> List[
         T_Node]:
         """分页查询同类节点。"""
-        stmt = select(model_cls).offset(offset).limit(limit)
+        stmt = select(model_cls).where(model_cls.is_deleted == False).offset(offset).limit(limit)
         result = await db.execute(stmt)
         return list(result.scalars().all())
 
@@ -97,7 +99,8 @@ class AsyncGraphCrudEngine:
     ) -> List[T_Node]:
         """按 JSON 属性精确查询节点（SQLite 使用 json_extract 定位匹配行）。"""
         stmt = select(model_cls).where(
-            model_cls.properties[key].as_string() == value
+            model_cls.properties[key].as_string() == value,
+            model_cls.is_deleted == False,
         )
         result = await db.execute(stmt)
         return list(result.scalars().all())
@@ -115,7 +118,7 @@ class AsyncGraphCrudEngine:
             ObjectModel.properties[f].as_string().like(kw)
             for f in _resolve_searchable_fields(object_type)
         ]
-        stmt = select(ObjectModel)
+        stmt = select(ObjectModel).where(ObjectModel.is_deleted == False)
         if object_type:
             stmt = stmt.where(ObjectModel.object_type == object_type)
         stmt = stmt.where(or_(*like_conds)).limit(limit)
@@ -151,7 +154,8 @@ class AsyncGraphCrudEngine:
         """按 part_number 精确查找零件；命中重复项时返回第一个（更新时用 exclude_id 排除自身）。"""
         from app.models.business import PartModel
         stmt = select(PartModel).where(
-            PartModel.properties["part_number"].as_string() == part_number
+            PartModel.properties["part_number"].as_string() == part_number,
+            PartModel.is_deleted == False,
         )
         if exclude_id is not None:
             stmt = stmt.where(PartModel.id != exclude_id)
@@ -181,7 +185,8 @@ class AsyncGraphCrudEngine:
         """
         from app.models.business import CategoryPartRelationModel
         stmt = select(CategoryPartRelationModel).where(
-            CategoryPartRelationModel.target_id == part_id
+            CategoryPartRelationModel.target_id == part_id,
+            CategoryPartRelationModel.is_deleted == False,
         )
         existing = (await db.execute(stmt)).scalars().first()
         if existing:
@@ -199,11 +204,15 @@ class AsyncGraphCrudEngine:
         anchor = select(RelationModel.source_id).where(
             RelationModel.target_id == source_id,
             RelationModel.relation_type == bom_identity,
+            RelationModel.is_deleted == False,
         )
         cte = anchor.cte(name="bom_cycle_cte", recursive=True)
         recursive = select(RelationModel.source_id).join(
             cte, RelationModel.target_id == cte.c.source_id
-        ).where(RelationModel.relation_type == bom_identity)
+        ).where(
+            RelationModel.relation_type == bom_identity,
+            RelationModel.is_deleted == False,
+        )
         full = cte.union(recursive)  # UNION 去重，防止已存在的环导致死循环
         stmt = select(full.c.source_id).where(full.c.source_id == target_id).limit(1)
         result = await db.execute(stmt)
@@ -215,14 +224,16 @@ class AsyncGraphCrudEngine:
         from app.models.business import BOMRelation
         # 所有作为 BOM 关系终点的对象（即作为他人子件）
         child_stmt = select(RelationModel.target_id).where(
-            RelationModel.relation_type == BOMRelation.__mapper_args__["polymorphic_identity"]
+            RelationModel.relation_type == BOMRelation.__mapper_args__["polymorphic_identity"],
+            RelationModel.is_deleted == False,
         )
         child_result = await db.execute(child_stmt)
         child_ids = {row[0] for row in child_result.fetchall()}
 
         # 所有作为 BOM 关系起点的对象
         parent_stmt = select(RelationModel.source_id).where(
-            RelationModel.relation_type == BOMRelation.__mapper_args__["polymorphic_identity"]
+            RelationModel.relation_type == BOMRelation.__mapper_args__["polymorphic_identity"],
+            RelationModel.is_deleted == False,
         )
         parent_result = await db.execute(parent_stmt)
         parent_ids = {row[0] for row in parent_result.fetchall()}
@@ -231,7 +242,7 @@ class AsyncGraphCrudEngine:
         root_ids = parent_ids - child_ids
 
         if root_ids:
-            roots_stmt = select(ObjectModel).where(ObjectModel.id.in_(root_ids))
+            roots_stmt = select(ObjectModel).where(ObjectModel.id.in_(root_ids), ObjectModel.is_deleted == False)
             roots_result = await db.execute(roots_stmt)
             return list(roots_result.scalars().all())
         return []
@@ -248,8 +259,28 @@ class AsyncGraphCrudEngine:
 
     @staticmethod
     async def delete_node(db: AsyncSession, node: ObjectModel) -> bool:
-        """删除节点，依赖 ON DELETE CASCADE 自动清理关联关系。"""
-        await db.delete(node)
+        """软删除节点：标记本节点 + 级联标记其关系边与文件（对齐物理 ON DELETE CASCADE 语义）。"""
+        from app.models.base import FileModel
+
+        node.is_deleted = True
+
+        # 级联软删除该节点作为起点或终点的所有关系边
+        rels = (await db.execute(
+            select(RelationModel).where(
+                or_(RelationModel.source_id == node.id, RelationModel.target_id == node.id),
+                RelationModel.is_deleted == False,
+            )
+        )).scalars().all()
+        for rel in rels:
+            rel.is_deleted = True
+
+        # 级联软删除其一对一文件记录（若存在）
+        file_rec = (await db.execute(
+            select(FileModel).where(FileModel.object_id == node.id, FileModel.is_deleted == False)
+        )).scalar_one_or_none()
+        if file_rec:
+            file_rec.is_deleted = True
+
         await db.commit()
         return True
 
@@ -267,6 +298,8 @@ class AsyncGraphCrudEngine:
     async def get_relation_by_id(db: AsyncSession, model_cls: Type[T_Edge], edge_id: uuid.UUID) -> Optional[T_Edge]:
         """按关系类和 UUID 查询关系边，类型不匹配时返回 None。"""
         edge = await db.get(RelationModel, edge_id)
+        if edge is None or edge.is_deleted:
+            return None
         if isinstance(edge, model_cls):
             return edge
         return None
@@ -279,7 +312,7 @@ class AsyncGraphCrudEngine:
             target_id: Optional[uuid.UUID] = None
     ) -> List[T_Edge]:
         """按起点、终点或两者共同筛选关系列表。"""
-        stmt = select(model_cls)
+        stmt = select(model_cls).where(model_cls.is_deleted == False)
         filters = []
         if source_id:
             filters.append(model_cls.source_id == source_id)
@@ -305,8 +338,8 @@ class AsyncGraphCrudEngine:
 
     @staticmethod
     async def delete_relation(db: AsyncSession, relation: RelationModel) -> bool:
-        """删除关系边，不影响两端的节点。"""
-        await db.delete(relation)
+        """软删除关系边，不影响两端的节点。"""
+        relation.is_deleted = True
         await db.commit()
         return True
 
@@ -327,7 +360,7 @@ class AsyncGraphCrudEngine:
             RelationModel.target_id,
             RelationModel.properties,
             literal_column("1").label("depth")
-        ).where(RelationModel.source_id == root_id)
+        ).where(RelationModel.source_id == root_id, RelationModel.is_deleted == False)
 
         # 2. 构造递归 CTE 容器
         cte_expr = anchor_stmt.cte(name="graph_tree_cte", recursive=True)
@@ -341,7 +374,8 @@ class AsyncGraphCrudEngine:
             RelationModel.properties,
             (cte_expr.c.depth + 1).label("depth")
         ).join(cte_expr, RelationModel.source_id == cte_expr.c.target_id).where(
-            cte_expr.c.depth < max_depth  # 深度上限，防止环导致的无限递归
+            cte_expr.c.depth < max_depth,  # 深度上限，防止环导致的无限递归
+            RelationModel.is_deleted == False,
         )
 
         # 4. 合并初始条件与递归成员
@@ -357,7 +391,9 @@ class AsyncGraphCrudEngine:
             final_cte.c.depth,
             ObjectModel.object_type.label("target_type"),
             ObjectModel.properties.label("target_properties")
-        ).join(ObjectModel, ObjectModel.id == final_cte.c.target_id)
+        ).join(ObjectModel, ObjectModel.id == final_cte.c.target_id).where(
+            ObjectModel.is_deleted == False,
+        )
 
         result = await db.execute(stmt)
 
@@ -398,7 +434,7 @@ class AsyncGraphCrudEngine:
             RelationModel.target_id,
             RelationModel.properties,
             literal_column("1").label("depth")
-        ).where(RelationModel.target_id == leaf_id)
+        ).where(RelationModel.target_id == leaf_id, RelationModel.is_deleted == False)
 
         # 2. 构造逆向递归 CTE 容器
         cte_expr = anchor_stmt.cte(name="reverse_graph_tree_cte", recursive=True)
@@ -412,7 +448,8 @@ class AsyncGraphCrudEngine:
             RelationModel.properties,
             (cte_expr.c.depth + 1).label("depth")
         ).join(cte_expr, RelationModel.target_id == cte_expr.c.source_id).where(
-            cte_expr.c.depth < max_depth  # 深度上限，防止环导致的无限递归
+            cte_expr.c.depth < max_depth,  # 深度上限，防止环导致的无限递归
+            RelationModel.is_deleted == False,
         )
 
         # 4. 合并初始条件与递归成员
@@ -428,7 +465,9 @@ class AsyncGraphCrudEngine:
             final_cte.c.depth,
             ObjectModel.object_type.label("source_type"),
             ObjectModel.properties.label("source_properties")
-        ).join(ObjectModel, ObjectModel.id == final_cte.c.source_id)  # 逆向连接的是 source_id
+        ).join(ObjectModel, ObjectModel.id == final_cte.c.source_id).where(  # 逆向连接的是 source_id
+            ObjectModel.is_deleted == False,
+        )
 
         result = await db.execute(stmt)
 
@@ -514,7 +553,7 @@ class AsyncGraphCrudEngine:
                         resolved_types[key] = local_node_types[key]
                     else:
                         exists_node = await db.get(ObjectModel, n_id)
-                        if not exists_node:
+                        if not exists_node or exists_node.is_deleted:
                             raise ValueError(
                                 f"网状拓扑中断：连线【{edge_item.relation_type}】指定的{role} ID [{n_id}] 在系统中不存在")
                         resolved_types[key] = exists_node.object_type
@@ -576,7 +615,7 @@ class AsyncGraphCrudEngine:
 
                 model_cls = node_mappers[node_item.object_type]
                 node_obj = await db.get(model_cls, node_item.id)
-                if not node_obj:
+                if not node_obj or node_obj.is_deleted:
                     raise ValueError(f"修改失败：目标节点 [{node_item.id}] 不存在或类型不是 '{node_item.object_type}'")
 
                 # 零件编码唯一性校验（改编码时排除自身）
@@ -603,27 +642,27 @@ class AsyncGraphCrudEngine:
 
                 edge_cls = edge_mappers[edge_item.relation_type]
                 edge_obj = await db.get(edge_cls, edge_item.id)
-                if not edge_obj:
+                if not edge_obj or edge_obj.is_deleted:
                     raise ValueError(
                         f"修改失败：目标关系边 [{edge_item.id}] 不存在或类型不是 '{edge_item.relation_type}'")
 
                 # 场景 A：拓扑重定向（修改起点/终点），需校验新节点存在
                 if edge_item.source_id:
                     src_check = await db.get(ObjectModel, edge_item.source_id)
-                    if not src_check:
+                    if not src_check or src_check.is_deleted:
                         raise ValueError(f"拓扑重定向失败：新设定的起点节点 [{edge_item.source_id}] 在系统中不存在")
                     edge_obj.source_id = edge_item.source_id
 
                 if edge_item.target_id:
                     tgt_check = await db.get(ObjectModel, edge_item.target_id)
-                    if not tgt_check:
+                    if not tgt_check or tgt_check.is_deleted:
                         raise ValueError(f"拓扑重定向失败：新设定的终点节点 [{edge_item.target_id}] 在系统中不存在")
                     edge_obj.target_id = edge_item.target_id
 
                 # 场景 A+：重定向后校验两端对象类型是否符合该关系类型的语义约束
                 src_node = await db.get(ObjectModel, edge_obj.source_id)
                 tgt_node = await db.get(ObjectModel, edge_obj.target_id)
-                if not src_node or not tgt_node:
+                if not src_node or src_node.is_deleted or not tgt_node or tgt_node.is_deleted:
                     raise ValueError("拓扑重定向失败：起点或终点节点不存在")
                 endpoint_err = AsyncGraphCrudEngine.validate_relation_endpoints(
                     edge_obj.relation_type, src_node.object_type, tgt_node.object_type
@@ -685,6 +724,8 @@ class AsyncGraphCrudEngine:
 
                 model_cls = node_mappers[node_item.object_type]
                 node_obj = await db.get(model_cls, node_item.id)
+                if node_obj is not None and node_obj.is_deleted:
+                    raise ValueError(f"重写终止：节点 [{node_item.id}] 已删除，无法重写")
 
                 if node_obj:
                     # 节点已存在：增量合并属性，并校验零件编码唯一性（排除自身）
@@ -714,6 +755,7 @@ class AsyncGraphCrudEngine:
             old_edges_stmt = select(RelationModel).where(
                 RelationModel.source_id == batch_data.root_id,
                 RelationModel.relation_type.in_(rewrite_identities),
+                RelationModel.is_deleted == False,
             )
             old_edges_res = await db.execute(old_edges_stmt)
             old_edges_list = old_edges_res.scalars().all()
@@ -727,7 +769,7 @@ class AsyncGraphCrudEngine:
 
             # 步骤 3：写入全新关系边
             root_node = await db.get(ObjectModel, batch_data.root_id)
-            if not root_node:
+            if not root_node or root_node.is_deleted:
                 raise ValueError(f"重写失败：根节点 [{batch_data.root_id}] 不存在")
 
             for edge_item in batch_data.relations:
@@ -737,7 +779,7 @@ class AsyncGraphCrudEngine:
                     target_type = local_node_types[target_key]
                 else:
                     exists_node = await db.get(ObjectModel, edge_item.target_id)
-                    if not exists_node:
+                    if not exists_node or exists_node.is_deleted:
                         raise ValueError(f"重写失败：新网络中指定的终点节点 [{edge_item.target_id}] 不存在")
                     target_type = exists_node.object_type
 
@@ -795,7 +837,7 @@ class AsyncGraphCrudEngine:
                 target_props = target.get("properties", {}) if isinstance(target.get("properties"), dict) else {}
                 tgt_id = target["id"]
                 tgt_node = await db.get(ObjectModel, tgt_id)
-                if tgt_node:
+                if tgt_node and not tgt_node.is_deleted:
                     _aggregate_part(aggregated, tgt_node, target_props, quantity)
 
         rows = []

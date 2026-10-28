@@ -15,10 +15,10 @@ from typing import Optional
 from sqlalchemy import DateTime, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, SoftDeleteMixin
 
 
-class CategoryEncoder(Base):
+class CategoryEncoder(Base, SoftDeleteMixin):
     """分类编码器：定义某分类下零部件的 code 生成规则。"""
     __tablename__ = "category_encoders"
 

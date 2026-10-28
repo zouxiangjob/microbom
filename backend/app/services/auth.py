@@ -53,7 +53,10 @@ def decode_token(token: str) -> dict:
 
 async def authenticate_user(db: AsyncSession, username: str, password: str) -> Optional[UserModel]:
     """校验用户名密码，成功返回用户，失败返回 None。"""
-    result = await db.execute(select(UserModel).where(UserModel.username == username))
+    result = await db.execute(select(UserModel).where(
+        UserModel.username == username,
+        UserModel.is_deleted == False,
+    ))
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         return None
@@ -77,7 +80,7 @@ _DEFAULT_USERS = [
 
 async def seed_default_users(db: AsyncSession) -> int:
     """users 表为空时创建默认演示账号，返回创建数量。"""
-    count = (await db.execute(select(func.count(UserModel.id)))).scalar_one()
+    count = (await db.execute(select(func.count(UserModel.id)).where(UserModel.is_deleted == False))).scalar_one()
     if count:
         return 0
     for item in _DEFAULT_USERS:

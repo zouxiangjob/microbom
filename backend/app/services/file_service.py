@@ -61,7 +61,10 @@ async def store_file_contents(
     file_save_path = os.path.join(UPLOAD_DIR, unique_filename)
 
     # 步骤 2：去重检查（复用已存在文件）
-    dup_query = await db.execute(select(FileModel).where(FileModel.stored_name == unique_filename))
+    dup_query = await db.execute(select(FileModel).where(
+        FileModel.stored_name == unique_filename,
+        FileModel.is_deleted == False,
+    ))
     existing_file = dup_query.scalar_one_or_none()
 
     is_duplicate = False
@@ -81,7 +84,7 @@ async def store_file_contents(
     try:
         # 3.1 校验对象节点是否存在
         obj_node = await db.get(model_cls, object_id)
-        if not obj_node:
+        if not obj_node or obj_node.is_deleted:
             raise ValueError(f"Object_Node_Not_Found: 在类型 {model_cls.__name__} 中未找到该 UUID")
 
         # 3.2 覆盖上传：对象与文件是一对一关系，先删除旧记录，提交后再清理旧物理文件
@@ -145,7 +148,10 @@ async def store_file_contents(
 
 async def get_file_for_download(db: AsyncSession, file_id: PyUUID) -> FileModel:
     """根据对象 UUID 获取文件记录，并校验物理文件是否存在。"""
-    result = await db.execute(select(FileModel).where(FileModel.object_id == file_id))
+    result = await db.execute(select(FileModel).where(
+        FileModel.object_id == file_id,
+        FileModel.is_deleted == False,
+    ))
     db_file = result.scalar_one_or_none()
 
     if not db_file:
