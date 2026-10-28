@@ -15,6 +15,7 @@ Vue 3 + Vite frontend for a BOM / PDM management system (product structure, part
 - **Detail page components** (`Attribute.vue`, `Bom.vue`, `RelatedObjects.vue`, `VersionHistory.vue`, `WhereUsed.vue`) each wrap their page-specific markup in `<DetailLayout title="..." active-tab="...">` and contain no shared header/tab code. 图档 and 技术文档 share one component `RelatedObjects.vue`, switched by a `kind` prop (`drawing` | `document`); 版本历史 = `VersionHistory.vue`, 被引用 = `WhereUsed.vue`. The tab→route mapping lives in `src/constants/detailTabs.js`, with routes registered in `src/router/index.js`.
 - **Non-part object pages** — technical documents and drawings have their own detail pages under `/object/:objectType/...` (`objectType` = `document` | `drawing`), built from `ObjectBasic.vue` / `ObjectParts.vue` / `VersionHistory.vue` / `WhereUsed.vue` (the last two are reused from the part detail pages). They share `DetailLayout` but use the smaller tab set `OBJECT_DETAIL_TABS` (基本属性 / 零部件 / 版本历史 / 被引用), passing `path-prefix="/object/{objectType}"` so the node context survives tab switches.
 - **Home page** — `src/components/Index.vue`: left navigation menu + resource tree + data table. The left menu is click-driven; the `activeMenu` ref determines what the right pane renders (via the `showResourceList` computed).
+- **Category attribute management** — `src/components/CategoryAttributes.vue` (route `/category/:id/attributes`) manages per-category attribute definitions (`attr_key` / `attr_label` / `value_type` / `required` / `options` / `unit` / `sort_order`). Reached from the category-tree header in `Index.vue` when a category is selected. The part detail page `Attribute.vue` renders a part's category attributes dynamically from these definitions via `getPartAttributeSchema`.
 
 ## Key conventions
 
@@ -22,6 +23,7 @@ Vue 3 + Vite frontend for a BOM / PDM management system (product structure, part
   - `src/api/nodes.js` — 节点 CRUD（`listNodes` / `getNode` / `createNode` / `updateNode` / `deleteNode`），`NODE_TYPES` = part/document/drawing/attachment/category。
   - `src/api/relations.js` — 关系与树穿透：`getNodeTree`（正向）、`getReverseTree`（反向 Where-Used）、`createRelation` / `deleteRelation`。
   - `src/api/files.js` — 文件上传/预览/下载/元数据（`uploadFile` / `fileUrl` / `getFileMeta`），文档与图档的物理文件走这里。
+  - `src/api/category-attributes.js` — 分类属性定义 CRUD + 零件属性清单聚合（`listCategoryAttributes` / `getPartAttributeSchema` / `createCategoryAttribute` / `updateCategoryAttribute` / `deleteCategoryAttribute`）。
   - `src/api/mapping.js` — 前后端字段映射契约与统一工具（`nodeToRow` / `documentToRow` / `drawingToRow` / `nodeTitle` / `nodeDisplayName` / `nodeLabel` / `statusTagType`）。
   - `src/utils/tree.js` — 把后端平铺树转成 el-tree 嵌套结构（`flatToTree` / `flatToReverseTree`）。注意：当前 `Bom.vue` / `WhereUsed.vue` 等仍各自手写了树构建逻辑，尚未复用这里的工具。
 - **关系类型有两套字符串，别混用。** `relations.js` 的 `RELATION_TYPES` 是 URL 段（如 `BOM: 'bom'`），用于请求路径；而数据里 `edge.relation_type` 是下划线全名（`bom_relation` / `part_drawing_relation` / `part_doc_relation`），用于过滤与展示。DRAWING、DOCUMENT 两种恰好 URL 段 == 数据名，唯独 BOM 不一致（`'bom'` vs `'bom_relation'`），`Bom.vue` 里硬编码了 `'bom_relation'`。

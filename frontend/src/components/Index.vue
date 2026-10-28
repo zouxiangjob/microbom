@@ -19,6 +19,9 @@
         <el-aside v-if="showTree" width="260px" class="tree-aside">
           <div class="tree-header">
             <span class="tree-title">分类</span>
+            <el-button v-if="selectedCategoryId" size="small" text type="primary" :icon="Setting" @click="goManageAttributes">
+              属性定义
+            </el-button>
           </div>
           <CategoryTree @select="onCategorySelect" @change="onCategoryChange" />
         </el-aside>
@@ -85,7 +88,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Search, Plus,
-  HomeFilled, Management
+  HomeFilled, Management, Setting
 } from '@element-plus/icons-vue'
 import { listNodes, createNode, NODE_TYPES } from '../api/nodes'
 import { listRelations, RELATION_TYPES } from '../api/relations'
@@ -318,6 +321,12 @@ const onCategoryChange = ({ node, action } = {}) => {
   }
   // 重命名 / 添加/移除零部件等：刷新该分类的关联零部件
   loadCategoryParts(selectedCategoryId.value)
+}
+
+// ── 分类属性定义管理 ──
+const goManageAttributes = () => {
+  if (!selectedCategoryId.value) return
+  router.push(`/category/${selectedCategoryId.value}/attributes`)
 }
 
 onMounted(loadData)
