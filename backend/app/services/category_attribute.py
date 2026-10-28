@@ -103,3 +103,61 @@ async def delete_attr_def(db: AsyncSession, attr_id: uuid.UUID) -> bool:
     await db.delete(defn)
     await db.commit()
     return True
+
+
+async def build_part_attribute_schema(db: AsyncSession, part_id: uuid.UUID) -> Optional[Dict[str, Any]]:
+    """聚合：反查零件所属分类 → 拉该分类属性定义 → 合并当前 properties 值。
+
+    返回 None 表示零件不存在或 object_type 不是 part。
+    """
+    from app.models.base import ObjectModel
+    from app.models.business import CategoryPartRelationModel, PartModel
+    from app.services.graph import AsyncGraphCrudEngine
+
+    part = await db.get(ObjectModel, part_id)
+    if not isinstance(part, PartModel):
+        return None
+
+    props = part.properties or {}
+
+    # 反查分类：category_part_relation（分类 -> 零件）；一个零件理论上可挂多个分类，暂取第一个
+    relations = await AsyncGraphCrudEngine.query_relations(
+        db, CategoryPartRelationModel, target_id=part_id
+    )
+    category_id = relations[0].source_id if relations else None
+
+    category_name = ""
+    if category_id:
+        category = await db.get(ObjectModel, category_id)
+        if category:
+            category_name = (category.properties or {}).get("name", "")
+
+    defs = await list_attr_defs(db, category_id) if category_id else []
+
+    attributes: List[Dict[str, Any]] = []
+    for d in defs:
+        has_value = d.attr_key in props
+        value = props.get(d.attr_key)
+        if value is None and not has_value:
+            value = d.default_value
+        attributes.append({
+            "id": d.id,
+            "attr_key": d.attr_key,
+            "attr_label": d.attr_label,
+            "value_type": d.value_type,
+            "required": d.required,
+            "default_value": d.default_value,
+            "options": d.options,
+            "unit": d.unit,
+            "sort_order": d.sort_order,
+            "value": value,
+            "has_value": has_value,
+        })
+
+    return {
+        "part_id": part.id,
+        "part_number": props.get("part_number", ""),
+        "category_id": category_id,
+        "category_name": category_name,
+        "attributes": attributes,
+    }

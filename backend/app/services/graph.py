@@ -174,6 +174,21 @@ class AsyncGraphCrudEngine:
         return None
 
     @staticmethod
+    async def ensure_single_category_for_part(db: AsyncSession, part_id: uuid.UUID) -> Optional[str]:
+        """校验 category_part_relation 的「一个零件只归一个分类」约束；已归类返回错误信息。
+
+        依据 category_part_relation（分类 -> 零件）：零件作为 target 至多出现在一条该关系边中。
+        """
+        from app.models.business import CategoryPartRelationModel
+        stmt = select(CategoryPartRelationModel).where(
+            CategoryPartRelationModel.target_id == part_id
+        )
+        existing = (await db.execute(stmt)).scalars().first()
+        if existing:
+            return f"零件 [{part_id}] 已归属其它分类，一个零件只能归一个分类"
+        return None
+
+    @staticmethod
     async def has_bom_cycle(db: AsyncSession, source_id: uuid.UUID, target_id: uuid.UUID) -> bool:
         """检测建立 source->target 的 BOM 关系是否会成环。
 
@@ -453,6 +468,8 @@ class AsyncGraphCrudEngine:
         local_node_types: Dict[str, str] = {}
         # 本次批次内的零件编码集合，用于去重校验
         local_part_numbers: set[str] = set()
+        # 本次批次内已被归类的零件（target）集合，用于「一零件一分类」约束
+        local_category_part_targets: set[str] = set()
 
         try:
             # 第一阶段：批量实例化并写入节点
@@ -511,6 +528,16 @@ class AsyncGraphCrudEngine:
                 )
                 if endpoint_err:
                     raise ValueError(f"批量终止：{endpoint_err}")
+
+                # 一零件一分类约束：同一批次内 + 数据库已有，均不允许重复归类
+                if edge_identity == "category_part_relation":
+                    tkey = str(edge_item.target_id)
+                    if tkey in local_category_part_targets:
+                        raise ValueError(f"批量终止：零件 [{edge_item.target_id}] 在本次批次内被重复归类")
+                    dup_err = await AsyncGraphCrudEngine.ensure_single_category_for_part(db, edge_item.target_id)
+                    if dup_err:
+                        raise ValueError(f"批量终止：{dup_err}")
+                    local_category_part_targets.add(tkey)
 
                 new_edge = edge_cls(
                     id=uuid.uuid4(),

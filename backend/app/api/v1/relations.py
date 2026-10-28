@@ -109,6 +109,12 @@ async def create_relation(
         if await AsyncGraphCrudEngine.has_bom_cycle(db, payload.source_id, payload.target_id):
             raise HTTPException(status_code=422, detail="BOM 环检测失败：该关系会形成循环引用")
 
+    # 一零件一分类约束：category_part_relation 的 target 零件不能重复归类
+    if model_cls.__mapper_args__["polymorphic_identity"] == "category_part_relation":
+        category_err = await AsyncGraphCrudEngine.ensure_single_category_for_part(db, payload.target_id)
+        if category_err:
+            raise HTTPException(status_code=422, detail=category_err)
+
     new_edge = model_cls(
         source_id=payload.source_id,
         target_id=payload.target_id,

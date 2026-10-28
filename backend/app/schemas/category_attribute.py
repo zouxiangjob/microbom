@@ -49,3 +49,27 @@ class CategoryAttributeResponse(BaseModel):
     sort_order: int
     created_at: datetime
     updated_at: datetime
+
+
+class CategoryAttributeValue(BaseModel):
+    """属性定义 + 当前值的合并视图（供零件属性清单动态渲染）。"""
+    id: uuid.UUID
+    attr_key: str
+    attr_label: str
+    value_type: str
+    required: bool
+    default_value: Optional[Any]
+    options: Optional[List[str]]
+    unit: Optional[str]
+    sort_order: int
+    value: Optional[Any] = Field(None, description="当前 properties 中的值；无值时退回 default_value")
+    has_value: bool = Field(..., description="properties 中是否真实存在该键")
+
+
+class PartAttributeSchemaResponse(BaseModel):
+    """零件所属分类的属性定义 + 当前值聚合结果。"""
+    part_id: uuid.UUID
+    part_number: str
+    category_id: Optional[uuid.UUID]
+    category_name: str
+    attributes: List[CategoryAttributeValue]

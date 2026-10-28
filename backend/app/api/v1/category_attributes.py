@@ -4,7 +4,7 @@
 import uuid
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
 
@@ -14,8 +14,10 @@ from app.schemas.category_attribute import (
     CategoryAttributeCreate,
     CategoryAttributeResponse,
     CategoryAttributeUpdate,
+    PartAttributeSchemaResponse,
 )
 from app.services.category_attribute import (
+    build_part_attribute_schema,
     create_attr_def,
     delete_attr_def,
     get_attr_def,
@@ -48,6 +50,19 @@ async def list_category_attributes(
 ):
     """返回某分类下按 sort_order 排序的全部属性定义。"""
     return await list_attr_defs(db, category_id)
+
+
+@router.get("/part-schema/{part_id}", response_model=PartAttributeSchemaResponse,
+            summary="聚合零件所属分类的属性定义与当前值")
+async def get_part_attribute_schema(
+        part_id: uuid.UUID = Path(..., description="零件节点 UUID"),
+        db: AsyncSession = Depends(get_db),
+):
+    """反查零件分类 → 拉取该分类属性定义 → 合并当前 properties 值，供前端动态渲染属性清单。"""
+    result = await build_part_attribute_schema(db, part_id)
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="零件不存在或类型不是 part")
+    return result
 
 
 @router.put("/{attr_id}", response_model=CategoryAttributeResponse, summary="更新属性定义")
