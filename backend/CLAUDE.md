@@ -10,14 +10,16 @@ MicroBOM is a BOM (Bill of Materials) management system with a graph-based data 
 
 The system uses **"万物皆对象" (everything is an object)** with polymorphic single-table inheritance via SQLAlchemy:
 
-### Three tables:
+### Core graph tables (objects / files / relations):
 1. **`objects`** — universal node table with `object_type` discriminator column + JSON `properties`
 2. **`files`** — file metadata, primary key `object_id` is also FK to `objects.id` (1:1)
 3. **`relations`** — directed edges (`source_id` → `target_id`) with `relation_type` discriminator + JSON `properties`
 
+New features use **dedicated standalone tables** (never reused business tables), each holding a plain-UUID reference back to a node — no FK, so deleting a node does NOT cascade to them: `users`, `baselines` + `baseline_items`, `category_encoders`, `category_attribute_defs`. Delete those rows explicitly when the referenced node is removed.
+
 ### Polymorphic subclasses (in `business.py`):
-- **Nodes**: `PartModel`, `DocumentModel`, `DrawingModel`, `AttachmentModel` — each maps to a different `object_type` value, stored in the single `objects` table
-- **Edges**: `BOMRelation`, `PartDocRelation`, `PartDrawingRelation`, `DocAttachmentRelation`, `DrawingAttachmentRelation`
+- **Nodes**: `PartModel`, `DocumentModel`, `DrawingModel`, `AttachmentModel`, `CategoryNodeModel` — each maps to a different `object_type` value, stored in the single `objects` table
+- **Edges**: `BOMRelation`, `PartDocRelation`, `PartDrawingRelation`, `DocAttachmentRelation`, `DrawingAttachmentRelation`, `CategoryRelationModel`, `CategoryPartRelationModel`
 
 ### Key patterns:
 - `ObjectModel.file_info` is a 1:1 relationship to `FileModel` (cascade delete)
