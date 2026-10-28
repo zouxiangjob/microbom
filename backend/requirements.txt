@@ -1,7 +1,6 @@
 # Web 框架
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
-nicegui>=2.0.0
 
 # 数据库 ORM（[asyncio] 附带 greenlet，SQLAlchemy 异步引擎必需）
 sqlalchemy[asyncio]>=2.0.30

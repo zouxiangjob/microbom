@@ -8,7 +8,7 @@ from app.config import settings
 DATABASE_URL = settings.DATABASE_URL
 
 # ==============================================================================
-# 1. 异步数据库引擎（供 FastAPI 路由层与 NiceGUI 视图层使用）
+# 1. 异步数据库引擎（供 FastAPI 路由层使用）
 # ==============================================================================
 engine = create_async_engine(
     DATABASE_URL,

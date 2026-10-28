@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MicroBOM is a BOM (Bill of Materials) management system with a graph-based data model. It combines a FastAPI REST API backend with a NiceGUI-powered web frontend (engineer, purchasing, workshop views), using SQLite as the database.
+MicroBOM is a BOM (Bill of Materials) management system with a graph-based data model. It combines a FastAPI REST API backend with a Vue 3 SPA web frontend (engineer, purchasing, workshop views), using SQLite as the database.
 
 ## Data Model (the core design)
 
@@ -27,37 +27,34 @@ The system uses **"万物皆对象" (everything is an object)** with polymorphic
 
 ## Database Session (single async engine)
 
-The project uses a single async engine (`sqlite+aiosqlite`) shared by both FastAPI routes and NiceGUI views:
+The project uses a single async engine (`sqlite+aiosqlite`) shared across all FastAPI routes:
 
 | Layer | Engine | Usage |
 |---|---|---|
-| Async (`engine`) | `sqlite+aiosqlite` | FastAPI routes via `Depends(get_db)`; NiceGUI views via `async with AsyncSessionLocal()` |
+| Async (`engine`) | `sqlite+aiosqlite` | FastAPI routes via `Depends(get_db)` |
 
 A PRAGMA listener on `engine.sync_engine` sets `foreign_keys=ON`, `journal_mode=WAL`, `busy_timeout=5000`.
 
-`AsyncGraphCrudEngine` exposes async-only methods; all view-layer DB access is `await`-ed.
+`AsyncGraphCrudEngine` exposes async-only methods; all DB access is `await`-ed.
 
-## NiceGUI vs FastAPI in this project
+## Frontend vs Backend
 
-- **FastAPI** (`app.main:app`): REST API at `/api/v1/*`, static file mounts at `/static/uploads/*`
-- **NiceGUI**: HTML pages registered via `@ui.page(...)` decorators in `main.py`, rendered by the views layer
-- NiceGUI pages use the same **async** database session (`async with AsyncSessionLocal()`) and `await` all DB calls
-- `ui.run_with(app, ...)` makes NiceGUI piggyback on the FastAPI/uvicorn server
+- **Backend** (`app.main:app`): FastAPI REST API at `/api/v1/*`, static file mounts at `/static/uploads/*`, and serves the Vue SPA build output (`FRONTEND_DIST_DIR`)
+- **Frontend** (`frontend/`): Vue 3 + Element Plus + Vite SPA, talking to the REST API via `src/api/*` (axios baseURL `/api/v1/`)
+- Engineer / purchase / workshop pages all consume the same REST endpoints
 
 ## File Upload Flow
 
-1. User uploads via `ui.upload` in engineer_detail page → `_handle_upload()` (async, reads `e.file.read()`)
-2. Creates DrawingModel/DocumentModel node + relation edge + FileModel record all in one transaction
+1. Frontend creates a Drawing/Document node via `POST /api/v1/nodes/{object_type}`, then uploads the physical file via `POST /api/v1/files/{file_type}/upload` (multipart `file` + `object_id`)
+2. `save_physical_file` (→ `store_file_contents`) writes the file, creates the `FileModel` record, and updates the node's `file_status`/`is_uploaded`/`md5` properties in one transaction
 3. MD5 deduplication: same file hash → reuse existing physical file path
 4. Files stored in `settings.UPLOAD_DIR` (default `./uploads`)
-5. Download endpoint: `GET /api/v1/files/download/{object_id}`
+5. Download endpoint: `GET /api/v1/files/download/{object_id}?inline=`
 
 ## Key Implementation Details
 
-- NiceGUI `ui.tree` uses Quasar QTree — `on_select` only fires for leaf nodes, `on_expand` fires for parent nodes. Use both channels (with debounce dedup) to reliably capture all node clicks (see `render_bom_tree` in `components.py`)
-- NiceGUI `ui.upload` callback receives `UploadEventArguments` — file data is at `e.file` (a `FileUpload` object), `read()` is async
 - Schema is managed by Alembic migrations (`alembic upgrade head`), not `Base.metadata.create_all`
-- The `requirements.txt` file has encoding issues (garbled Chinese comments) — be careful when editing
+- Frontend tree components convert the backend's flat CTE result to nested structure via `src/utils/tree.js`
 
 ## Recurring Patterns
 
@@ -73,11 +70,11 @@ This enables generic endpoints like `POST /api/v1/nodes/{object_type}` where `ob
 
 ### CTE Tree Traversal
 
-`AsyncGraphCrudEngine.get_node_tree_by_cte()` recursively walks the BOM graph in a single SQL query. The flat result list (depth-annotated edges + target nodes) is converted to nested `[{id, label, children}]` structure by `cte_flat_to_nested_tree()` for the `ui.tree` component.
+`AsyncGraphCrudEngine.get_node_tree_by_cte()` recursively walks the BOM graph in a single SQL query. The flat result list (depth-annotated edges + target nodes) is converted to nested `[{id, label, children}]` structure by `cte_flat_to_nested_tree()` for the frontend tree component.
 
 ### ECN Notification Bus
 
-`ECNNotifier` in `views/base.py` is a thread-safe in-memory singleton. Engineer page publishes change notifications; purchase and workshop pages poll for updates. No message queue needed — works across same-process sessions.
+`ECNNotifier` in `app/services/ecn.py` is a thread-safe in-memory singleton. The engineer page publishes change notifications (`POST /api/v1/ecn/publish`); purchase and workshop pages poll for updates (`GET /api/v1/ecn/notifications` + `POST /api/v1/ecn/ack`). No message queue needed — works across same-process sessions.
 
 ## Seed Data Structure
 

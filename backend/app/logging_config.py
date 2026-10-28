@@ -61,7 +61,6 @@ def setup_logging() -> None:
             "app": {"level": level, "propagate": True},
             # 第三方库降噪：只保留告警及以上
             "aiosqlite": {"level": "WARNING"},
-            "nicegui": {"level": "WARNING"},
             "uvicorn": {"level": level},
             "uvicorn.access": {"level": "WARNING"},
             # SQL 回显开关

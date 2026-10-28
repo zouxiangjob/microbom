@@ -801,7 +801,7 @@ def _aggregate_part(aggregated: Dict[str, Dict[str, Any]], node: ObjectModel, pr
 
 
 def cte_flat_to_nested_tree(flat_nodes: List[Dict[str, Any]], root_id: uuid.UUID) -> List[Dict[str, Any]]:
-    """将 CTE 返回的平铺列表转换为 NiceGUI ui.tree 所需的嵌套结构。
+    """将 CTE 返回的平铺列表转换为前端树形组件所需的嵌套结构。
 
     每个平铺节点包含：{edge, depth, target_node}
     """

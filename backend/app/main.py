@@ -3,7 +3,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from nicegui import ui
 from starlette.middleware.cors import CORSMiddleware
 
 from app.config import settings
@@ -12,7 +11,6 @@ from app.api.v1 import api_router
 from app.logging_config import get_logger, setup_logging
 from app.middleware.exceptions import setup_exception_handlers
 from app.middleware.logging import RequestLoggingMiddleware
-from app.views.engineer import render_engineer_page
 
 setup_logging()
 logger = get_logger("main")
@@ -87,46 +85,7 @@ app.include_router(api_router, prefix="/api/v1")
 
 
 # ==============================================================================
-# 3. 注册网页路由（NiceGUI 页面）
-#    ENABLE_NICEGUI_UI=False 时（如 Docker 镜像）不注册，由 Vue SPA 接管根路径。
-# ==============================================================================
-if settings.ENABLE_NICEGUI_UI:
-    @ui.page('/')
-    @ui.page('/index')
-    async def home():
-        await render_engineer_page()
-
-
-    @ui.page('/engineer')
-    async def engineer():
-        from app.views.engineer import render_engineer_page
-        await render_engineer_page()
-
-
-    @ui.page('/engineer_detail')
-    async def engineer_detail():
-        from app.views.engineer_detail import render_engineer_detail_page
-        await render_engineer_detail_page()
-
-
-    @ui.page('/purchase')
-    async def purchase():
-        from app.views.purchase import render_purchase_page
-        await render_purchase_page()
-
-
-    @ui.page('/workshop')
-    async def workshop():
-        from app.views.workshop import render_workshop_page
-        render_workshop_page()
-
-
-    # 4. 让 NiceGUI 复用 FastAPI 服务
-    ui.run_with(app, storage_secret=settings.FACTORY_STORAGE_SECRET)
-
-
-# ==============================================================================
-# 5. 托管 Vue SPA 构建产物（dist），作为镜像默认对外界面。
+# 3. 托管 Vue SPA 构建产物（dist），作为对外界面。
 #    仅在 FRONTEND_DIST_DIR 目录存在时启用；本地开发由 Vite dev server 提供。
 # ==============================================================================
 if os.path.isdir(settings.FRONTEND_DIST_DIR):
@@ -135,7 +94,7 @@ if os.path.isdir(settings.FRONTEND_DIST_DIR):
     if os.path.isdir(assets_dir):
         app.mount("/assets", StaticFiles(directory=assets_dir), name="spa-assets")
 
-    # 兜底路由：非 API / 上传 / 文档 / NiceGUI 内部路径的 GET 请求，回退到 SPA 的 index.html
+    # 兜底路由：非 API / 上传 / 文档等内部路径的 GET 请求，回退到 SPA 的 index.html
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str):
         # 避免把不存在的 API 请求吞成 index.html

@@ -1,7 +1,7 @@
 """
 ECN 工程变更通知：线程安全的内存总线 + 变更差异日志生成。
 
-从 NiceGUI 视图层抽离到服务层，供 NiceGUI 页面与 REST 接口共用。
+供 REST 接口与前端页面轮询共用。
 """
 import threading
 from typing import List

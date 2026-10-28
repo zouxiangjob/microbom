@@ -41,7 +41,7 @@ async def store_file_contents(
         content_type: Optional[str],
         contents: bytes,
 ) -> FileModel:
-    """保存物理文件并登记元数据（与上传通道解耦，供 API 与 NiceGUI 视图层复用）。
+    """保存物理文件并登记元数据（与上传通道解耦，供 REST API 复用）。
 
     流程：
     1. 计算文件 MD5，若已有相同 MD5 则复用物理文件。

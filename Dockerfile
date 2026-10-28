@@ -22,8 +22,6 @@ FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    # 关闭 NiceGUI 页面，改由 Vue SPA 接管根路径
-    ENABLE_NICEGUI_UI=false \
     # 数据库默认落在 /app/data（与 docker-compose 一致，裸 docker run 也不混淆）
     DATABASE_URL=sqlite+aiosqlite:////app/data/sql_app.db
 
