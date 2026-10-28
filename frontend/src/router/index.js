@@ -7,9 +7,13 @@ import WhereUsed from '../components/WhereUsed.vue'
 import VersionHistory from '../components/VersionHistory.vue'
 import ObjectBasic from '../components/ObjectBasic.vue'
 import ObjectParts from '../components/ObjectParts.vue'
+import Purchase from '../components/Purchase.vue'
+import Workshop from '../components/Workshop.vue'
 
 const routes = [
   { path: '/', component: Index },
+  { path: '/purchase', component: Purchase },
+  { path: '/workshop', component: Workshop },
   { path: '/attribute/:id', component: Attribute },
   { path: '/bom/:id', component: Bom },
   // 图档 / 技术文档（零部件详情页签）：同一组件按 kind 区分

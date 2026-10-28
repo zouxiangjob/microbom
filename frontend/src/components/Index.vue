@@ -1,10 +1,7 @@
 <template>
   <div class="common-layout">
     <el-container class="layout-container">
-      <el-header class="header">
-        <div class="logo">MicroBOM<span class="logo-accent"></span></div>
-        <div class="sheet-tag">SHEET <span class="sheet-no">01</span> · {{ activeMenuLabel }}</div>
-      </el-header>
+      <TopNav active="engineer" :label="activeMenuLabel" />
 
       <el-container class="body-container">
         <el-aside width="150px" class="main-aside">
@@ -94,6 +91,7 @@ import { listNodes, createNode, NODE_TYPES } from '../api/nodes'
 import { listRelations, RELATION_TYPES } from '../api/relations'
 import { nodeToRow, documentToRow, drawingToRow, statusTagType } from '../api/mapping'
 import CategoryTree from './CategoryTree.vue'
+import TopNav from './TopNav.vue'
 
 const router = useRouter()
 
@@ -342,40 +340,6 @@ onMounted(loadData)
 .body-container {
   min-height: 0;
   overflow: hidden;
-}
-
-/* ── 顶栏 = 图纸 title block：DIN 标题 + 等宽图纸号 ── */
-.header {
-  background-color: var(--ink-900);
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  color: #fff;
-  padding: 0 20px;
-  border-bottom: 2px solid var(--blue);
-}
-
-.logo {
-  font-family: var(--font-display);
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: #fff;
-}
-
-.logo-accent {
-  color: var(--cyan);
-}
-
-.sheet-tag {
-  font-family: var(--font-data);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  color: var(--ink-300);
-}
-
-.sheet-no {
-  color: var(--cyan);
 }
 
 /* ── 侧边导航：深墨底，激活项普鲁士蓝 ── */

@@ -6,9 +6,12 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.baselines import router as baselines_router
 from app.api.v1.category_attributes import router as category_attributes_router
 from app.api.v1.category_encoders import router as category_encoders_router
+from app.api.v1.ecn import router as ecn_router
 from app.api.v1.file import router as file_router
 from app.api.v1.nodes import router as nodes_router
+from app.api.v1.purchase import router as purchase_router
 from app.api.v1.relations import router as relations_router
+from app.api.v1.workshop import router as workshop_router
 
 api_router = APIRouter()
 
@@ -32,3 +35,12 @@ api_router.include_router(category_attributes_router, prefix="/category-attribut
 
 # 挂载分类编码器接口（需登录，独立专用表，与业务表解耦）
 api_router.include_router(category_encoders_router, prefix="/category-encoders", tags=["分类编码器"], dependencies=[Depends(get_current_user)])
+
+# 挂载采购端接口（BOM 打平汇总 + ERP 采购导入 Excel，需登录）
+api_router.include_router(purchase_router, prefix="/purchase", tags=["采购"], dependencies=[Depends(get_current_user)])
+
+# 挂载车间看图接口（条码/编码查询 3D/2D 图纸，需登录）
+api_router.include_router(workshop_router, prefix="/workshop", tags=["车间"], dependencies=[Depends(get_current_user)])
+
+# 挂载工程变更通知接口（查询/确认/发布，需登录）
+api_router.include_router(ecn_router, prefix="/ecn", tags=["工程变更通知"], dependencies=[Depends(get_current_user)])

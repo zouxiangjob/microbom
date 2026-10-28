@@ -1,47 +1,12 @@
 """
 全局共享的基础 UI 模块：顶栏渲染、ECN 变更通知总线。
 """
-import threading
-from typing import List
-
 from nicegui import ui
 
+# ECN 通知总线已抽离到服务层（app/services/ecn.py），此处重新导出供视图层
+# `from app.views.base import ecn_notifier` 继续可用。
+from app.services.ecn import ECNNotifier, ecn_notifier  # noqa: F401
 from app.views.styles import GLOBAL_CSS
-
-
-class ECNNotifier:
-    """线程安全的 ECN（工程变更通知）全局总线。
-
-    设计部发布新版本后，采购端和车间端实时感知变更。
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._notifications: List[str] = []
-
-    def publish(self, notifications: List[str]) -> None:
-        """发布一批变更通知，覆盖旧通知。"""
-        with self._lock:
-            self._notifications = list(notifications)
-
-    def get(self) -> List[str]:
-        """获取当前所有变更通知的快照。"""
-        with self._lock:
-            return list(self._notifications)
-
-    def clear(self) -> None:
-        """清空所有通知。"""
-        with self._lock:
-            self._notifications.clear()
-
-    @property
-    def has_notifications(self) -> bool:
-        """是否有待处理的通知。"""
-        with self._lock:
-            return len(self._notifications) > 0
-
-
-ecn_notifier = ECNNotifier()
 
 
 def _inject_global_styles() -> None:

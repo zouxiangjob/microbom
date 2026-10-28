@@ -8,6 +8,7 @@ from nicegui import app, ui
 from app.database.session import AsyncSessionLocal
 from app.logging_config import get_logger
 from app.models.business import PartModel
+from app.services.ecn import build_ecn_diff_logs
 from app.services.graph import AsyncGraphCrudEngine
 from app.views.base import ecn_notifier, render_header
 from app.views.components import render_bom_tree, render_industrial_table
@@ -98,7 +99,9 @@ def _inject_action_slot(pending_table: ui.table, current_role: str) -> None:
 async def on_click_release_btn(item_code: str) -> None:
     """主管点击发布按钮后的后端响应逻辑。"""
     logger.info("主管已授权发布新版本，编码: %s", item_code)
-    ecn_notifier.publish(await _get_ecn_diff_logs(item_code))
+    async with AsyncSessionLocal() as session:
+        logs = await build_ecn_diff_logs(session, item_code)
+    ecn_notifier.publish(logs)
     ui.notify(f'已向全厂下发 {item_code} 的 ECN 变更通知！', type='positive')
 
 
@@ -131,46 +134,3 @@ async def _get_pending_rows() -> List[dict]:
                 'user': p.properties.get('designer', ''),
             })
         return rows
-
-
-async def _get_ecn_diff_logs(item_code: str) -> List[str]:
-    """从数据库加载指定物料的 BOM 结构，生成 ECN 变更差异日志。"""
-    async with AsyncSessionLocal() as session:
-        parts = await AsyncGraphCrudEngine.query_nodes_by_property(
-            session, PartModel, "part_number", item_code
-        )
-        if not parts:
-            return [f"物料 [{item_code}] 未在系统中找到"]
-
-        part = parts[0]
-        props = part.properties if part.properties else {}
-        part_name = props.get('name', item_code)
-        version = props.get('version', 'V1.0')
-        designer = props.get('designer', '未知')
-
-        # 加载 BOM 树，生成变更描述
-        tree = await AsyncGraphCrudEngine.get_node_tree_by_cte(session, part.id, max_depth=10)
-
-        logs = [
-            f"变更对象: {item_code} ({part_name})",
-            f"版本号: {version} | 设计师: {designer}",
-        ]
-
-        if tree:
-            # 汇总直接子件
-            direct_children = [n for n in tree if n["depth"] == 1]
-            logs.append(f"直属子件共 {len(direct_children)} 个:")
-            for child in direct_children[:20]:  # 最多显示 20 个
-                target_props = child.get("target_node", {}).get("properties", {})
-                child_code = target_props.get("part_number", "") or str(child["target_node"]["id"])[:8]
-                child_name = target_props.get("name", "")
-                edge_props = child.get("edge", {}).get("properties", {})
-                qty = edge_props.get("quantity", 1) if isinstance(edge_props, dict) else 1
-                logs.append(f"  └ {child_code} ({child_name}) × {qty}")
-
-            total_descendants = len(tree)
-            logs.append(f"BOM 树共计 {total_descendants} 条关系边，最大深度 {max(n['depth'] for n in tree)}")
-        else:
-            logs.append("当前 BOM 无子件结构（可能为叶子零件）")
-
-        return logs
