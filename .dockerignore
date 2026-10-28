@@ -33,7 +33,6 @@ backend/start.bat
 **/.idea
 **/.vscode
 **/.claude
-**/.nicegui
 
 # 其他
 temp
