@@ -342,31 +342,32 @@ onMounted(loadData)
   overflow: hidden;
 }
 
-/* ── 侧边导航：深墨底，激活项普鲁士蓝 ── */
+/* ── 侧边导航：纸面底，激活项青色 ── */
 .main-aside {
-  background-color: var(--ink-900);
+  background-color: var(--surface);
+  border-right: 1px solid var(--line);
 }
 
 .side-menu {
   border-right: none;
-  --el-menu-bg-color: var(--ink-900);
-  --el-menu-text-color: #B7C4D4;
-  --el-menu-active-color: #fff;
-  --el-menu-hover-bg-color: rgba(255, 255, 255, 0.06);
+  --el-menu-bg-color: var(--surface);
+  --el-menu-text-color: var(--ink-700);
+  --el-menu-active-color: var(--blue);
+  --el-menu-hover-bg-color: var(--blue-soft);
   --el-menu-item-height: 44px;
 }
 
 .side-menu :deep(.el-menu-item.is-active) {
-  background-color: var(--blue);
-  color: #fff;
+  background-color: var(--blue-soft);
+  color: var(--blue);
 }
 
 .side-menu :deep(.el-sub-menu__title) {
-  color: #B7C4D4;
+  color: var(--ink-700);
 }
 
 .side-menu :deep(.el-sub-menu__title:hover) {
-  color: #fff;
+  color: var(--ink-900);
 }
 
 /* ── 分类树侧栏：图纸面板 ── */
